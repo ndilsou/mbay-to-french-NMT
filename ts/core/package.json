@@ -1,0 +1,14 @@
+{
+  "name": "@mbay-translator/core",
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "test": "sst bind vitest",
+    "typecheck": "tsc -noEmit"
+  },
+  "devDependencies": {
+    "vitest": "^0.34.6",
+    "@types/node": "^20.8.3",
+    "sst": "^2.28.1"
+  }
+}

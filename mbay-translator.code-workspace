@@ -1,0 +1,22 @@
+{
+  "folders": [
+    {
+      "name": "ts",
+      "path": "./ts"
+    },
+    {
+      "name": "py",
+      "path": "./py"
+    },
+    {
+      "name": "Root",
+      "path": "./"
+    }
+  ],
+  "settings": {
+    "[python]": {
+      "editor.defaultFormatter": "ms-python.black-formatter"
+    },
+    "python.languageServer": "Jedi",
+  }
+}

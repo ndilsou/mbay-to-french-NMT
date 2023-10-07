@@ -1,0 +1,19 @@
+[tool.poetry]
+name = "train_t5"
+version = "0.1.0"
+description = ""
+authors = ['ndilsou <nasoungadoy@gmail.com>']
+license = ""
+
+packages = [
+    
+]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+
+[tool.poetry.group.dev.dependencies]
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
