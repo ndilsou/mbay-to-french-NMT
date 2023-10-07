@@ -1,16 +1,27 @@
 [tool.poetry]
 name = "train_t5"
-version = "0.1.0"
+version = "0.0.0"
 description = ""
 authors = ['ndilsou <nasoungadoy@gmail.com>']
 license = ""
 
 packages = [
-    
+    { include = "mbay-nmt/train_t5", from = "../../bases" },
+    { include = "mbay-nmt/", from = "../../components" },
+    { include = "mbay-nmt/train_t5", from = "../../components" },
 ]
 
 [tool.poetry.dependencies]
 python = "^3.11"
+peft = "^0.5.0"
+transformers = { extras = ["torch"], version = "^4.34.0" }
+datasets = { extras = ["s3"], version = "^2.14.5" }
+sagemaker = "^2.191.0"
+accelerate = "^0.23.0"
+evaluate = "^0.4.0"
+bitsandbytes = "^0.41.1"
+safetensors = "^0.4.0"
+sacrebleu = "^2.3.1"
 
 [tool.poetry.group.dev.dependencies]
 

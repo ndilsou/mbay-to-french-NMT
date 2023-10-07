@@ -1,5 +1,5 @@
 [tool.polylith]
-namespace = "mbay-translation"
+namespace = "mbay-nmt"
 git_tag_pattern = "stable-*"
 
 [tool.polylith.structure]
