@@ -6,9 +6,8 @@ authors = ['ndilsou <nasoungadoy@gmail.com>']
 license = ""
 
 packages = [
-    { include = "mbay-nmt/train_t5", from = "../../bases" },
-    { include = "mbay-nmt/", from = "../../components" },
-    { include = "mbay-nmt/train_t5", from = "../../components" },
+    { include = "mbay-nmt/fine_tune_t5", from = "../../bases" },
+    { include = "mbay-nmt/utils", from = "../../components" },
 ]
 
 [tool.poetry.dependencies]
@@ -22,6 +21,9 @@ evaluate = "^0.4.0"
 bitsandbytes = "^0.41.1"
 safetensors = "^0.4.0"
 sacrebleu = "^2.3.1"
+ninja = "^1.11.1"
+packaging = "^23.2"
+sentencepiece = "^0.1.99"
 
 [tool.poetry.group.dev.dependencies]
 

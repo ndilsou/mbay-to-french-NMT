@@ -1,5 +1,5 @@
 [tool.poetry]
-name = "mbay-nmt"
+name = "mbay_nmt"
 version = "0.1.0"
 description = ""
 authors = ["ndilsou <nasoungadoy@gmail.com>"]
@@ -7,10 +7,10 @@ readme = "README.md"
 
 packages = [
     { include = "development" },
-    { include = "mbay-nmt/train_t5", from = "./bases" },
-    { include = "mbay-nmt/utils", from = "./components" },
-    { include = "mbay-nmt/preprocessing", from = "./components" },
-    { include = "mbay-nmt/training", from = "./components" },
+    { include = "mbay_nmt/train_t5", from = "./bases" },
+    { include = "mbay_nmt/utils", from = "./components" },
+    { include = "mbay_nmt/preprocessing", from = "./components" },
+    { include = "mbay_nmt/training", from = "./components" },
 ]
 
 [tool.poetry.dependencies]
@@ -32,6 +32,9 @@ httpx = "^0.25.0"
 python-dotenv = "^1.0.0"
 rich = "^13.6.0"
 wandb = "^0.15.12"
+ninja = "^1.11.1"
+packaging = "^23.2"
+sentencepiece = "^0.1.99"
 
 
 [tool.poetry.group.dev.dependencies]
@@ -39,6 +42,7 @@ jupyterlab = "^4.0.6"
 ipython = "^8.16.1"
 ruff = "^0.0.292"
 ipywidgets = "^8.1.1"
+jedi = "^0.19.1"
 
 [build-system]
 requires = ["poetry-core"]

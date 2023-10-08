@@ -1,7 +1,7 @@
-import os
 import argparse
+import wandb
 from transformers import (
-    AutoModelForCausalLM,
+    AutoModelForSeq2SeqLM,
     AutoTokenizer,
     set_seed,
     default_data_collator,
@@ -11,9 +11,12 @@ from transformers import (
 )
 from datasets import load_from_disk
 import torch
-
 import bitsandbytes as bnb
 from huggingface_hub import login, HfFolder
+
+from .utils import tokenize_dataset
+
+PROJECT_NAME = "mbay-nmt"
 
 
 def parse_args():
@@ -30,6 +33,9 @@ def parse_args():
     )
     parser.add_argument(
         "--hf_token", type=str, default=HfFolder.get_token(), help="Path to dataset."
+    )
+    parser.add_argument(
+        "--wandb_token", type=str, default=None, help="Path to dataset."
     )
     # add training hyperparameters for epochs, batch size, learning rate, and seed
     parser.add_argument(
@@ -158,10 +164,29 @@ def create_peft_model(model, gradient_checkpointing=True, bf16=True):
 
 
 def training_function(args):
+    # configure WanB
+    if args.wandb_token:
+        wandb.login(key=args.wandb_token)  # Pass your W&B API key here
+
+        wandb.init(
+            # set the wandb project where this run will be logged
+            project=PROJECT_NAME,
+            # track hyperparameters and run metadata
+            config={
+                "learning_rate": 0.02,
+                "architecture": "CNN",
+                "dataset": "CIFAR-100",
+                "epochs": 10,
+            },
+        )
+
     # set seed
     set_seed(args.seed)
 
     dataset = load_from_disk(args.dataset_path)
+
+    tokenizer = AutoTokenizer.from_pretrained(args.model_id)
+    dataset = tokenize_dataset(tokenizer, dataset)
     # load model from the hub with a bnb config
     bnb_config = BitsAndBytesConfig(
         load_in_4bit=True,
@@ -170,7 +195,7 @@ def training_function(args):
         bnb_4bit_compute_dtype=torch.bfloat16,
     )
 
-    model = AutoModelForCausalLM.from_pretrained(
+    model = AutoModelForSeq2SeqLM.from_pretrained(
         args.model_id,
         use_cache=False
         if args.gradient_checkpointing
@@ -198,13 +223,15 @@ def training_function(args):
         logging_strategy="steps",
         logging_steps=10,
         save_strategy="no",
+        report_to="wandb" if args.wandb_token else None,
     )
 
     # Create Trainer instance
     trainer = Trainer(
         model=model,
         args=training_args,
-        train_dataset=dataset,
+        train_dataset=dataset["train"],
+        eval_dataset=dataset,
         data_collator=default_data_collator,
     )
 
@@ -221,10 +248,10 @@ def training_function(args):
         del trainer
         torch.cuda.empty_cache()
 
-        from peft import AutoPeftModelForCausalLM
+        from peft import AutoPeftModelForSeq2SeqLM
 
         # load PEFT model in fp16
-        model = AutoPeftModelForCausalLM.from_pretrained(
+        model = AutoPeftModelForSeq2SeqLM.from_pretrained(
             output_dir,
             low_cpu_mem_usage=True,
             torch_dtype=torch.float16,
