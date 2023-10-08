@@ -1,3 +1,4 @@
-from .run import main
+from .train import main
+from . import utils
 
-__all__ = ["main"]
+__all__ = ["main", "utils"]

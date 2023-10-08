@@ -1,20 +1,24 @@
 import argparse
+
+from functools import partial
+
+import bitsandbytes as bnb
+import torch
 import wandb
+from huggingface_hub import HfFolder, login
 from transformers import (
     AutoModelForSeq2SeqLM,
     AutoTokenizer,
-    set_seed,
-    default_data_collator,
     BitsAndBytesConfig,
     Trainer,
     TrainingArguments,
+    default_data_collator,
+    set_seed,
 )
-from datasets import load_from_disk
-import torch
-import bitsandbytes as bnb
-from huggingface_hub import login, HfFolder
 
-from .utils import tokenize_dataset
+from datasets import load_from_disk
+
+from . import utils
 
 PROJECT_NAME = "mbay-nmt"
 
@@ -118,9 +122,9 @@ def find_all_linear_names(model):
 
 def create_peft_model(model, gradient_checkpointing=True, bf16=True):
     from peft import (
-        get_peft_model,
         LoraConfig,
         TaskType,
+        get_peft_model,
         prepare_model_for_kbit_training,
     )
     from peft.tuners.lora import LoraLayer
@@ -186,7 +190,7 @@ def training_function(args):
     dataset = load_from_disk(args.dataset_path)
 
     tokenizer = AutoTokenizer.from_pretrained(args.model_id)
-    dataset = tokenize_dataset(tokenizer, dataset)
+    dataset = utils.tokenize_dataset(tokenizer, dataset)
     # load model from the hub with a bnb config
     bnb_config = BitsAndBytesConfig(
         load_in_4bit=True,
@@ -224,6 +228,7 @@ def training_function(args):
         logging_steps=10,
         save_strategy="no",
         report_to="wandb" if args.wandb_token else None,
+        evaluation_strategy="epoch",
     )
 
     # Create Trainer instance
@@ -233,6 +238,8 @@ def training_function(args):
         train_dataset=dataset["train"],
         eval_dataset=dataset,
         data_collator=default_data_collator,
+        compute_metrics=partial(utils.compute_metrics, tokenizer),
+        preprocess_logits_for_metrics=utils.preprocess_logits_for_metrics,
     )
 
     # Start training

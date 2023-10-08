@@ -14,7 +14,7 @@ packages = [
 ]
 
 [tool.poetry.dependencies]
-python = "^3.11"
+python = ">=3.11,<3.13"
 peft = "^0.5.0"
 transformers = { extras = ["torch"], version = "^4.34.0" }
 datasets = { extras = ["s3"], version = "^2.14.5" }
@@ -35,6 +35,9 @@ wandb = "^0.15.12"
 ninja = "^1.11.1"
 packaging = "^23.2"
 sentencepiece = "^0.1.99"
+nvidia-ml-py3 = "^7.352.0"
+scipy = "^1.11.3"
+rouge-score = "^0.1.2"
 
 
 [tool.poetry.group.dev.dependencies]
