@@ -2,6 +2,7 @@ import argparse
 
 from functools import partial
 
+from datetime import datetime
 import bitsandbytes as bnb
 import torch
 import wandb
@@ -169,20 +170,21 @@ def create_peft_model(model, gradient_checkpointing=True, bf16=True):
 
 def training_function(args):
     # configure WanB
+    wandb_run_name: str | None = None
     if args.wandb_token:
         wandb.login(key=args.wandb_token)  # Pass your W&B API key here
-
         wandb.init(
             # set the wandb project where this run will be logged
             project=PROJECT_NAME,
             # track hyperparameters and run metadata
-            config={
-                "learning_rate": 0.02,
-                "architecture": "CNN",
-                "dataset": "CIFAR-100",
-                "epochs": 10,
-            },
+            # config={
+            #     "learning_rate": 0.02,
+            #     "architecture": "CNN",
+            #     "dataset": "CIFAR-100",
+            #     "epochs": 10,
+            # },
         )
+        wandb_run_name = f"{args.model_id}-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
 
     # set seed
     set_seed(args.seed)
@@ -226,8 +228,9 @@ def training_function(args):
         logging_dir=f"{output_dir}/logs",
         logging_strategy="steps",
         logging_steps=10,
-        save_strategy="no",
+        save_strategy="no",  # XXX: we'll need to address this before we can train on spot.
         report_to="wandb" if args.wandb_token else None,
+        run_name=wandb_run_name if args.wandb_token else None,
         evaluation_strategy="epoch",
     )
 
@@ -236,7 +239,7 @@ def training_function(args):
         model=model,
         args=training_args,
         train_dataset=dataset["train"],
-        eval_dataset=dataset,
+        eval_dataset=dataset["validation"],
         data_collator=default_data_collator,
         compute_metrics=partial(utils.compute_metrics, tokenizer),
         preprocess_logits_for_metrics=utils.preprocess_logits_for_metrics,
