@@ -7,7 +7,7 @@ readme = "README.md"
 
 packages = [
     { include = "development" },
-    { include = "mbay_nmt/train_t5", from = "./bases" },
+    { include = "mbay_nmt/fine_tune_t5", from = "./bases" },
     { include = "mbay_nmt/utils", from = "./components" },
     { include = "mbay_nmt/preprocessing", from = "./components" },
     { include = "mbay_nmt/training", from = "./components" },

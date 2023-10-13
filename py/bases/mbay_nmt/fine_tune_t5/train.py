@@ -56,7 +56,7 @@ def parse_args():
         "--lr", type=float, default=5e-5, help="Learning rate to use for training."
     )
     parser.add_argument(
-        "--seed", type=int, default=42, help="Seed to use for training."
+        "--seed", type=int, default=93100, help="Seed to use for training."
     )
     parser.add_argument(
         "--gradient_checkpointing",
@@ -192,7 +192,7 @@ def training_function(args):
     dataset = load_from_disk(args.dataset_path)
 
     tokenizer = AutoTokenizer.from_pretrained(args.model_id)
-    dataset = utils.tokenize_dataset(tokenizer, dataset)
+    # dataset = utils.tokenize_dataset(tokenizer, dataset)
     # load model from the hub with a bnb config
     bnb_config = BitsAndBytesConfig(
         load_in_4bit=True,
@@ -275,7 +275,7 @@ def training_function(args):
         trainer.model.save_pretrained(sagemaker_save_dir, safe_serialization=True)
 
     # save tokenizer for easy inference
-    tokenizer = AutoTokenizer.from_pretrained(args.model_id)
+    # tokenizer = AutoTokenizer.from_pretrained(args.model_id)
     tokenizer.save_pretrained(sagemaker_save_dir)
 
 
