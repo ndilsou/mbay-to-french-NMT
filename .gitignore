@@ -333,3 +333,4 @@ data/**
 
 # local env files
 .env*.local
+.prompts

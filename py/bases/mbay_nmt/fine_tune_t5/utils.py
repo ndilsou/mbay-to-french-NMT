@@ -22,6 +22,8 @@ def compute_metrics(tokenizer: AutoTokenizer, eval_preds):
     preds, labels = eval_preds
     if isinstance(preds, tuple):
         preds = preds[0]
+
+    preds = np.where(preds != -100, preds, tokenizer.pad_token_id)
     decoded_preds = tokenizer.batch_decode(preds, skip_special_tokens=True)
 
     labels = np.where(labels != -100, labels, tokenizer.pad_token_id)
@@ -65,7 +67,9 @@ def prepare_pair(examples, prefix: str, source_lang: Lang, target_lang: Lang):
     return inputs, targets
 
 
-def preprocess_records(tokenizer: AutoTokenizer, examples, padding_max_length=True):
+def preprocess_records(
+    tokenizer: AutoTokenizer, examples, padding_max_length=True, replace_pad_tokens=True
+):
     inputs: list[str] = []
     targets: list[str] = []
 
@@ -100,6 +104,13 @@ def preprocess_records(tokenizer: AutoTokenizer, examples, padding_max_length=Tr
         truncation=True,
         padding="max_length" if padding_max_length else None,
     )
+
+    if replace_pad_tokens:
+        model_inputs["labels"] = [
+            [(tok if tok != tokenizer.pad_token_id else -100) for tok in label]
+            for label in model_inputs["labels"]
+        ]
+
     return model_inputs
 
 

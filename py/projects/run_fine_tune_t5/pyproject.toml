@@ -6,13 +6,13 @@ authors = ['ndilsou <nasoungadoy@gmail.com>']
 license = ""
 
 packages = [
-    { include = "mbay-nmt/fine_tune_t5", from = "../../bases" },
-    { include = "mbay-nmt/training", from = "../../components" },
-    { include = "mbay-nmt/utils", from = "../../components" },
+    { include = "mbay_nmt/fine_tune_t5", from = "../../bases" },
+    { include = "mbay_nmt/training", from = "../../components" },
+    { include = "mbay_nmt/utils", from = "../../components" },
 ]
 
 [tool.poetry.dependencies]
-python = ">=3.11,<3.13"
+python = ">=3.10,<3.13"
 peft = "^0.5.0"
 transformers = { extras = ["torch"], version = "^4.34.0" }
 datasets = { extras = ["s3"], version = "^2.14.5" }

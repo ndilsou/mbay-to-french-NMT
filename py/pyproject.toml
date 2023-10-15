@@ -14,7 +14,7 @@ packages = [
 ]
 
 [tool.poetry.dependencies]
-python = ">=3.11,<3.13"
+python = ">=3.10,<3.13"
 peft = "^0.5.0"
 transformers = { extras = ["torch"], version = "^4.34.0" }
 datasets = { extras = ["s3"], version = "^2.14.5" }
@@ -57,4 +57,4 @@ line-length = 120
 [tool.poe.tasks]
 dev = "uvicorn require.api.main:app --reload"
 py = "python"
-build = "poetry build-project -f wheel --directory"
+build = "poetry build-project --directory"

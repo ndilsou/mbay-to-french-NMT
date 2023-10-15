@@ -17,6 +17,6 @@
     "[python]": {
       "editor.defaultFormatter": "ms-python.black-formatter"
     },
-    "python.languageServer": "Jedi",
+    "python.languageServer": "Default",
   }
 }

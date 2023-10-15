@@ -34,14 +34,15 @@ def parse_args():
         help="Model id to use for training.",
     )
     parser.add_argument(
-        "--dataset_path", type=str, default="lm_dataset", help="Path to dataset."
+        "--dataset_path",
+        type=str,
+        default="/opt/ml/input/data/training",
+        help="Path to dataset.",
     )
     parser.add_argument(
-        "--hf_token", type=str, default=HfFolder.get_token(), help="Path to dataset."
+        "--hf_token", type=str, default=HfFolder.get_token(), help="Huggingface token"
     )
-    parser.add_argument(
-        "--wandb_token", type=str, default=None, help="Path to dataset."
-    )
+    parser.add_argument("--wandb_token", type=str, default=None, help="WandB token")
     # add training hyperparameters for epochs, batch size, learning rate, and seed
     parser.add_argument(
         "--epochs", type=int, default=3, help="Number of epochs to train for."
@@ -147,7 +148,7 @@ def create_peft_model(model, gradient_checkpointing=True, bf16=True):
         target_modules=modules,
         lora_dropout=0.1,
         bias="none",
-        task_type=TaskType.CAUSAL_LM,
+        task_type=TaskType.SEQ_2_SEQ_LM,
     )
 
     model = get_peft_model(model, peft_config)
@@ -157,6 +158,7 @@ def create_peft_model(model, gradient_checkpointing=True, bf16=True):
         if isinstance(module, LoraLayer):
             if bf16:
                 module = module.to(torch.bfloat16)
+        # pre-process the model by upcasting the layer norms in float 32 for
         if "norm" in name:
             module = module.to(torch.float32)
         if "lm_head" in name or "embed_tokens" in name:
@@ -216,7 +218,7 @@ def training_function(args):
     )
 
     # Define training args
-    output_dir = "/tmp/llm"
+    output_dir = "/opt/ml/model"
     training_args = TrainingArguments(
         output_dir=output_dir,
         per_device_train_batch_size=args.per_device_train_batch_size,
@@ -227,11 +229,14 @@ def training_function(args):
         # logging strategies
         logging_dir=f"{output_dir}/logs",
         logging_strategy="steps",
-        logging_steps=10,
-        save_strategy="no",  # XXX: we'll need to address this before we can train on spot.
+        logging_steps=50,
+        load_best_model_at_end=True,
+        metric_for_best_model="bleu",
+        save_strategy="epoch",  # XXX: we'll need to address this before we can train on spot.
         report_to="wandb" if args.wandb_token else None,
         run_name=wandb_run_name if args.wandb_token else None,
-        evaluation_strategy="epoch",
+        evaluation_strategy="steps",
+        eval_steps=200,
     )
 
     # Create Trainer instance
@@ -269,10 +274,12 @@ def training_function(args):
         # Merge LoRA and base model and save
         model = model.merge_and_unload()
         model.save_pretrained(
-            sagemaker_save_dir, safe_serialization=True, max_shard_size="2GB"
+            sagemaker_save_dir, safe_serialization=False, max_shard_size="2GB"
         )
     else:
-        trainer.model.save_pretrained(sagemaker_save_dir, safe_serialization=True)
+        trainer.model.save_pretrained(
+            sagemaker_save_dir, safe_serialization=False
+        )  # XXX: safe_serialization=True causes an error
 
     # save tokenizer for easy inference
     # tokenizer = AutoTokenizer.from_pretrained(args.model_id)
