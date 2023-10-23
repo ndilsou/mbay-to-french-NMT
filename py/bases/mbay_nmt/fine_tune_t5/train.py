@@ -232,11 +232,12 @@ def training_function(args):
         logging_steps=50,
         load_best_model_at_end=True,
         metric_for_best_model="bleu",
-        save_strategy="epoch",  # XXX: we'll need to address this before we can train on spot.
+        save_strategy="steps",  # XXX: we'll need to address this before we can train on spot.
+        save_steps=1000,
         report_to="wandb" if args.wandb_token else None,
         run_name=wandb_run_name if args.wandb_token else None,
         evaluation_strategy="steps",
-        eval_steps=200,
+        eval_steps=500,
     )
 
     # Create Trainer instance
