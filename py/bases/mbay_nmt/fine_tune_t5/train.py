@@ -250,8 +250,8 @@ def training_function(args):
         data_collator=default_data_collator,
         compute_metrics=partial(utils.compute_metrics, tokenizer),
         preprocess_logits_for_metrics=utils.preprocess_logits_for_metrics,
-        callbacks=[EarlyStoppingCallback(early_stopping_patience=3)],
     )
+    trainer.add_callback(EarlyStoppingCallback(early_stopping_patience=3))
 
     # Start training
     trainer.train()
