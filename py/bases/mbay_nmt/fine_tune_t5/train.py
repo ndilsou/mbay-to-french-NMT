@@ -17,6 +17,7 @@ from transformers import (
     default_data_collator,
     set_seed,
     EarlyStoppingCallback,
+    SchedulerType,
 )
 
 from datasets import load_from_disk
@@ -221,6 +222,7 @@ def training_function(args: Arguments):
         num_train_epochs=args.epochs,
         gradient_checkpointing=args.gradient_checkpointing,
         save_total_limit=5,
+        lr_scheduler_type=SchedulerType.COSINE_WITH_RESTARTS,
         # logging strategies
         warmup_ratio=args.warmup_ratio,
         logging_dir=f"{output_dir}/logs",
