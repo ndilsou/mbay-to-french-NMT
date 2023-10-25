@@ -1,8 +1,11 @@
 import argparse
 
 from functools import partial
-
+from dataclasses import dataclass, field
+from typing import Optional
 from datetime import datetime
+import os
+import sys
 import bitsandbytes as bnb
 import torch
 import wandb
@@ -13,6 +16,7 @@ from transformers import (
     BitsAndBytesConfig,
     Trainer,
     TrainingArguments,
+    HfArgumentParser,
     default_data_collator,
     set_seed,
     EarlyStoppingCallback,
@@ -25,60 +29,49 @@ from . import utils
 PROJECT_NAME = "mbay-nmt"
 
 
-def parse_args():
+@dataclass
+class Arguments:
+    """
+    Arguments pertaining to which model/config/tokenizer we are going to fine-tune from.
+    """
+
+    model_id: str = field(
+        default=None, metadata={"help": "Model id to use for training."}
+    )
+    dataset_path: str = field(
+        default="/opt/ml/input/data/training", metadata={"help": "Path to dataset."}
+    )
+    warmup_ratio: float = field(default=0.02, metadata={"help": "Warmup ratio"})
+    hf_token: str = field(default=None, metadata={"help": "Huggingface token"})
+    wandb_token: str = field(default=None, metadata={"help": "WandB token"})
+    epochs: int = field(default=3, metadata={"help": "Number of epochs to train for."})
+    per_device_train_batch_size: int = field(
+        default=1, metadata={"help": "Batch size to use for training."}
+    )
+    lr: float = field(
+        default=5e-5, metadata={"help": "Learning rate to use for training."}
+    )
+    seed: int = field(default=93100, metadata={"help": "Seed to use for training."})
+    gradient_checkpointing: bool = field(
+        default=True, metadata={"help": "Path to deepspeed config file."}
+    )
+    bf16: bool = field(default=None, metadata={"help": "Whether to use bf16."})
+    merge_weights: bool = field(
+        default=True,
+        metadata={"help": "Whether to merge LoRA weights with base model."},
+    )
+
+
+def parse_args() -> Arguments:
     """Parse the arguments."""
-    parser = argparse.ArgumentParser()
-    # add model id and dataset path argument
-    parser.add_argument(
-        "--model_id",
-        type=str,
-        help="Model id to use for training.",
-    )
-    parser.add_argument(
-        "--dataset_path",
-        type=str,
-        default="/opt/ml/input/data/training",
-        help="Path to dataset.",
-    )
-    parser.add_argument(
-        "--hf_token", type=str, default=HfFolder.get_token(), help="Huggingface token"
-    )
-    parser.add_argument("--wandb_token", type=str, default=None, help="WandB token")
-    # add training hyperparameters for epochs, batch size, learning rate, and seed
-    parser.add_argument(
-        "--epochs", type=int, default=3, help="Number of epochs to train for."
-    )
-    parser.add_argument(
-        "--per_device_train_batch_size",
-        type=int,
-        default=1,
-        help="Batch size to use for training.",
-    )
-    parser.add_argument(
-        "--lr", type=float, default=5e-5, help="Learning rate to use for training."
-    )
-    parser.add_argument(
-        "--seed", type=int, default=93100, help="Seed to use for training."
-    )
-    parser.add_argument(
-        "--gradient_checkpointing",
-        type=bool,
-        default=True,
-        help="Path to deepspeed config file.",
-    )
-    parser.add_argument(
-        "--bf16",
-        type=bool,
-        default=True if torch.cuda.get_device_capability()[0] == 8 else False,
-        help="Whether to use bf16.",
-    )
-    parser.add_argument(
-        "--merge_weights",
-        type=bool,
-        default=True,
-        help="Whether to merge LoRA weights with base model.",
-    )
-    args, _ = parser.parse_known_args()
+
+    parser = HfArgumentParser(Arguments)
+    if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
+        # If we pass only one argument to the script and it's the path to a json file,
+        # let's parse it to get our arguments.
+        args, _ = parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]))
+    else:
+        args, _ = parser.parse_args_into_dataclasses()
 
     if args.hf_token:
         print(f"Logging into the Hugging Face Hub with token {args.hf_token[:10]}...")
@@ -171,7 +164,7 @@ def create_peft_model(model, gradient_checkpointing=True, bf16=True):
     return model
 
 
-def training_function(args):
+def training_function(args: Arguments):
     # configure WanB
     wandb_run_name: str | None = None
     if args.wandb_token:
@@ -227,7 +220,9 @@ def training_function(args):
         learning_rate=args.lr,
         num_train_epochs=args.epochs,
         gradient_checkpointing=args.gradient_checkpointing,
+        save_total_limit=5,
         # logging strategies
+        warmup_ratio=args.warmup_ratio,
         logging_dir=f"{output_dir}/logs",
         logging_strategy="steps",
         logging_steps=50,
@@ -240,7 +235,6 @@ def training_function(args):
         evaluation_strategy="steps",
         eval_steps=500,
     )
-
     # Create Trainer instance
     trainer = Trainer(
         model=model,
