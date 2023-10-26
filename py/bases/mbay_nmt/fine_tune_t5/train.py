@@ -1,15 +1,12 @@
-import argparse
-
 from functools import partial
 from dataclasses import dataclass, field
-from typing import Optional
 from datetime import datetime
 import os
 import sys
 import bitsandbytes as bnb
 import torch
 import wandb
-from huggingface_hub import HfFolder, login
+from huggingface_hub import login
 from transformers import (
     AutoModelForSeq2SeqLM,
     AutoTokenizer,
@@ -23,6 +20,8 @@ from transformers import (
 )
 
 from datasets import load_from_disk
+
+from mbay_nmt.training.core import WandbPredictionProgressCallback
 
 from . import utils
 
@@ -229,11 +228,11 @@ def training_function(args: Arguments):
         load_best_model_at_end=True,
         metric_for_best_model="bleu",
         save_strategy="steps",  # XXX: we'll need to address this before we can train on spot.
-        save_steps=1000,
+        save_steps=500,
         report_to="wandb" if args.wandb_token else None,
         run_name=wandb_run_name if args.wandb_token else None,
         evaluation_strategy="steps",
-        eval_steps=500,
+        eval_steps=250,
     )
     # Create Trainer instance
     trainer = Trainer(
@@ -246,6 +245,15 @@ def training_function(args: Arguments):
         preprocess_logits_for_metrics=utils.preprocess_logits_for_metrics,
     )
     trainer.add_callback(EarlyStoppingCallback(early_stopping_patience=3))
+
+    progress_callback = WandbPredictionProgressCallback(
+        trainer=trainer,
+        tokenizer=tokenizer,
+        val_dataset=dataset["validation"],
+        num_samples=10,
+        freq=250,
+    )
+    trainer.add_callback(progress_callback)
 
     # Start training
     trainer.train()
