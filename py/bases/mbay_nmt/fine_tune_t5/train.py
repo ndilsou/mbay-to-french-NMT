@@ -230,9 +230,10 @@ def training_function(args: Arguments):
         logging_steps=50,
         load_best_model_at_end=True,
         metric_for_best_model="bleu",
-        save_strategy="steps",  # XXX: we'll need to address this before we can train on spot.
+        save_strategy="steps",
         save_steps=500,
-        report_to="wandb" if args.wandb_token else None,
+        # report_to="wandb" if args.wandb_token else None,
+        report_to="none", # We manually add our custom wandb callback below.
         run_name=wandb_run_name if args.wandb_token else None,
         evaluation_strategy="steps",
         eval_steps=250,
@@ -254,12 +255,11 @@ def training_function(args: Arguments):
         tokenizer=tokenizer,
         val_dataset=dataset["validation"],
         num_samples=10,
-        freq=250,
     )
     trainer.add_callback(progress_callback)
 
 
-    print("Registered callbacks: ", trainer.callback_handler.callbacks) 
+    print("Registered callbacks: ", trainer.callback_handler.callbacks)
 
     # Start training
     trainer.train()

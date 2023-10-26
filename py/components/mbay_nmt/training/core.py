@@ -43,7 +43,7 @@ def decode_predictions(tokenizer, predictions, input_ids):
 class WandbPredictionProgressCallback(WandbCallback):
     """Custom WandbCallback to log model predictions during training.
 
-    This callback logs model predictions and labels to a wandb.Table at each logging step during training.
+    This callback augments the default WandbCallback and logs model predictions and labels to a wandb.Table at each logging step during training.
     It allows to visualize the model predictions as the training progresses.
 
     Attributes:
@@ -60,7 +60,6 @@ class WandbPredictionProgressCallback(WandbCallback):
         tokenizer: AutoTokenizer,
         val_dataset: Dataset,
         num_samples=100,
-        freq=2,
     ):
         """Initializes the WandbPredictionProgressCallback instance.
 
@@ -69,19 +68,16 @@ class WandbPredictionProgressCallback(WandbCallback):
             tokenizer (AutoTokenizer): The tokenizer associated with the model.
             val_dataset (Dataset): The validation dataset.
             num_samples (int, optional): Number of samples to select from the validation dataset for generating predictions. Defaults to 100.
-            freq (int, optional): Frequency of logging. Defaults to 2.
         """
         super().__init__()
         self.trainer = trainer
         self.tokenizer = tokenizer
         self.sample_dataset = val_dataset.select(range(num_samples))
-        self.freq = freq
 
     def on_evaluate(self, args, state, control, **kwargs):
         super().on_evaluate(args, state, control, **kwargs)
         # control the frequency of logging by logging the predictions every `freq` epochs
 
-        # if state.epoch % self.freq == 0:
         # generate predictions
         predictions = self.trainer.predict(self.sample_dataset)
         # decode predictions and labels
