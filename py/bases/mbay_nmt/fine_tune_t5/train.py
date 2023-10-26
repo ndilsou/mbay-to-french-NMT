@@ -65,12 +65,13 @@ def parse_args() -> Arguments:
     """Parse the arguments."""
 
     parser = HfArgumentParser(Arguments)
+    args: Arguments
     if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
         # If we pass only one argument to the script and it's the path to a json file,
         # let's parse it to get our arguments.
-        args, _ = parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]))
+        args = parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]))
     else:
-        args, _ = parser.parse_args_into_dataclasses()
+        args = parser.parse_args_into_dataclasses()
 
     if args.hf_token:
         print(f"Logging into the Hugging Face Hub with token {args.hf_token[:10]}...")
