@@ -2,6 +2,7 @@ import os
 import re
 import time
 from datasets import Dataset
+import numpy as np
 from transformers import (
     AutoTokenizer,
     Trainer,
@@ -24,11 +25,20 @@ def training_job_name(model_id: str) -> str:
     return PATTERN.sub("-", job_name)
 
 
-def decode_predictions(tokenizer, predictions):
-    labels = tokenizer.batch_decode(predictions.label_ids)
-    prediction_text = tokenizer.batch_decode(predictions.predictions.argmax(axis=-1))
-    return {"labels": labels, "predictions": prediction_text}
 
+def decode_predictions(tokenizer, predictions, input_ids):
+    input_ids = np.where(predictions.label_ids != -100, input_ids, tokenizer.pad_token_id)
+    prompt = tokenizer.batch_decode(input_ids,  skip_special_tokens=True)
+
+    label_ids = np.where(predictions.label_ids != -100, predictions.label_ids, tokenizer.pad_token_id)
+    labels = tokenizer.batch_decode(label_ids,  skip_special_tokens=True)
+    
+    preds = predictions.predictions
+    if isinstance(preds, tuple):
+        preds = preds[0]
+    prediction_text = tokenizer.batch_decode(preds.argmax(axis=-1),  skip_special_tokens=True)
+
+    return {"prompt": prompt, "labels": labels, "predictions": prediction_text}
 
 class WandbPredictionProgressCallback(WandbCallback):
     """Custom WandbCallback to log model predictions during training.
@@ -70,14 +80,16 @@ class WandbPredictionProgressCallback(WandbCallback):
     def on_evaluate(self, args, state, control, **kwargs):
         super().on_evaluate(args, state, control, **kwargs)
         # control the frequency of logging by logging the predictions every `freq` epochs
-        if state.epoch % self.freq == 0:
-            # generate predictions
-            predictions = self.trainer.predict(self.sample_dataset)
-            # decode predictions and labels
-            predictions = decode_predictions(self.tokenizer, predictions)
-            # add predictions to a wandb.Table
-            predictions_df = pd.DataFrame(predictions)
-            predictions_df["epoch"] = state.epoch
-            records_table = self._wandb.Table(dataframe=predictions_df)
-            # log the table to wandb
-            self._wandb.log({"sample_predictions": records_table})
+
+        # if state.epoch % self.freq == 0:
+        # generate predictions
+        predictions = self.trainer.predict(self.sample_dataset)
+        # decode predictions and labels
+        predictions = decode_predictions(self.tokenizer, predictions, self.sample_dataset["input_ids"])
+        # add predictions to a wandb.Table
+        predictions_df = pd.DataFrame(predictions)
+        predictions_df["epoch"] = state.epoch
+        records_table = self._wandb.Table(dataframe=predictions_df)
+        print(records_table)
+        # log the table to wandb
+        self._wandb.log({"sample_predictions": records_table})
