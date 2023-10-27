@@ -1,6 +1,7 @@
 import os
 import re
-import time
+import random
+import string
 from datasets import Dataset
 import numpy as np
 from transformers import (
@@ -20,25 +21,33 @@ def ensure_flash_attention():
 
 
 def training_job_name(model_id: str) -> str:
-    job_name = f"mbay-nmt-{model_id}"
+    # Generate a random 5 alphanum string to salt the job name
+    salt = "".join(random.choices(string.ascii_lowercase + string.digits, k=5))
+    job_name = f"mbay-nmt-{model_id}-{salt}"
 
     return PATTERN.sub("-", job_name)
 
 
-
 def decode_predictions(tokenizer, predictions, input_ids):
-    input_ids = np.where(predictions.label_ids != -100, input_ids, tokenizer.pad_token_id)
-    prompt = tokenizer.batch_decode(input_ids,  skip_special_tokens=True)
+    input_ids = np.where(
+        predictions.label_ids != -100, input_ids, tokenizer.pad_token_id
+    )
+    prompt = tokenizer.batch_decode(input_ids, skip_special_tokens=True)
 
-    label_ids = np.where(predictions.label_ids != -100, predictions.label_ids, tokenizer.pad_token_id)
-    labels = tokenizer.batch_decode(label_ids,  skip_special_tokens=True)
-    
+    label_ids = np.where(
+        predictions.label_ids != -100, predictions.label_ids, tokenizer.pad_token_id
+    )
+    labels = tokenizer.batch_decode(label_ids, skip_special_tokens=True)
+
     preds = predictions.predictions
     if isinstance(preds, tuple):
         preds = preds[0]
-    prediction_text = tokenizer.batch_decode(preds.argmax(axis=-1),  skip_special_tokens=True)
+    prediction_text = tokenizer.batch_decode(
+        preds.argmax(axis=-1), skip_special_tokens=True
+    )
 
     return {"prompt": prompt, "labels": labels, "predictions": prediction_text}
+
 
 class WandbPredictionProgressCallback(WandbCallback):
     """Custom WandbCallback to log model predictions during training.
@@ -81,7 +90,9 @@ class WandbPredictionProgressCallback(WandbCallback):
         # generate predictions
         predictions = self.trainer.predict(self.sample_dataset)
         # decode predictions and labels
-        predictions = decode_predictions(self.tokenizer, predictions, self.sample_dataset["input_ids"])
+        predictions = decode_predictions(
+            self.tokenizer, predictions, self.sample_dataset["input_ids"]
+        )
         # add predictions to a wandb.Table
         predictions_df = pd.DataFrame(predictions)
         predictions_df["epoch"] = state.epoch

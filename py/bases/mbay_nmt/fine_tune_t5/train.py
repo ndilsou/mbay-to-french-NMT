@@ -19,6 +19,7 @@ from transformers import (
     EarlyStoppingCallback,
     SchedulerType,
 )
+from transformers.trainer_utils import get_last_checkpoint
 
 from datasets import load_from_disk
 
@@ -60,6 +61,9 @@ class Arguments:
         default=True,
         metadata={"help": "Whether to merge LoRA weights with base model."},
     )
+    output_dir: str = field(
+        default="/opt/ml/checkpoints", metadata={"help": "Path to save model."}
+    )
 
 
 def parse_args() -> Arguments:
@@ -70,9 +74,9 @@ def parse_args() -> Arguments:
     if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
         # If we pass only one argument to the script and it's the path to a json file,
         # let's parse it to get our arguments.
-        args, = parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]))
+        (args,) = parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]))
     else:
-        args, = parser.parse_args_into_dataclasses()
+        (args,) = parser.parse_args_into_dataclasses()
 
     if args.hf_token:
         print(f"Logging into the Hugging Face Hub with token {args.hf_token[:10]}...")
@@ -166,22 +170,15 @@ def create_peft_model(model, gradient_checkpointing=True, bf16=True):
 
 
 def training_function(args: Arguments):
+    run_name = os.environ["TRAINING_JOB_NAME"]
     # configure WanB
-    wandb_run_name: str | None = None
     if args.wandb_token:
         wandb.login(key=args.wandb_token)  # Pass your W&B API key here
         wandb.init(
             # set the wandb project where this run will be logged
             project=PROJECT_NAME,
-            # track hyperparameters and run metadata
-            # config={
-            #     "learning_rate": 0.02,
-            #     "architecture": "CNN",
-            #     "dataset": "CIFAR-100",
-            #     "epochs": 10,
-            # },
+            resume=True,
         )
-        wandb_run_name = f"{args.model_id}-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
 
     # set seed
     set_seed(args.seed)
@@ -213,9 +210,12 @@ def training_function(args: Arguments):
     )
 
     # Define training args
-    output_dir = "/opt/ml/model"
+    # output_dir = "/opt/ml/model"
     training_args = TrainingArguments(
-        output_dir=output_dir,
+        output_dir=args.output_dir,
+        overwrite_output_dir=True
+        if get_last_checkpoint(args.output_dir) is not None
+        else False,
         per_device_train_batch_size=args.per_device_train_batch_size,
         bf16=args.bf16,  # Use BF16 if available
         learning_rate=args.lr,
@@ -225,7 +225,7 @@ def training_function(args: Arguments):
         lr_scheduler_type=SchedulerType.COSINE_WITH_RESTARTS,
         # logging strategies
         warmup_ratio=args.warmup_ratio,
-        logging_dir=f"{output_dir}/logs",
+        logging_dir=f"{args.output_dir}/logs",
         logging_strategy="steps",
         logging_steps=50,
         load_best_model_at_end=True,
@@ -233,8 +233,8 @@ def training_function(args: Arguments):
         save_strategy="steps",
         save_steps=500,
         # report_to="wandb" if args.wandb_token else None,
-        report_to="none", # We manually add our custom wandb callback below.
-        run_name=wandb_run_name if args.wandb_token else None,
+        report_to="none",  # We manually add our custom wandb callback below.
+        run_name=run_name,
         evaluation_strategy="steps",
         eval_steps=250,
     )
@@ -258,17 +258,22 @@ def training_function(args: Arguments):
     )
     trainer.add_callback(progress_callback)
 
-
     print("Registered callbacks: ", trainer.callback_handler.callbacks)
 
     # Start training
-    trainer.train()
+    # check if checkpoint existing if so continue training
+    if get_last_checkpoint(args.output_dir) is not None:
+        print("***** continue training *****")
+        last_checkpoint = get_last_checkpoint(args.output_dir)
+        trainer.train(resume_from_checkpoint=last_checkpoint)
+    else:
+        trainer.train()
 
     sagemaker_save_dir = "/opt/ml/model/"
     if args.merge_weights:
         # merge adapter weights with base model and save
         # save int 4 model
-        trainer.model.save_pretrained(output_dir, safe_serialization=False)
+        trainer.model.save_pretrained(args.output_dir, safe_serialization=False)
         # clear memory
         del model
         del trainer
@@ -278,7 +283,7 @@ def training_function(args: Arguments):
 
         # load PEFT model in fp16
         model = AutoPeftModelForSeq2SeqLM.from_pretrained(
-            output_dir,
+            args.output_dir,
             low_cpu_mem_usage=True,
             torch_dtype=torch.float16,
         )

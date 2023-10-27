@@ -67,9 +67,7 @@ def prepare_pair(examples, prefix: str, source_lang: Lang, target_lang: Lang):
     return inputs, targets
 
 
-def preprocess_records(
-    tokenizer: AutoTokenizer, examples, padding_max_length=True, replace_pad_tokens=True
-):
+def format_prompt_output_pairs(examples):
     inputs: list[str] = []
     targets: list[str] = []
 
@@ -97,9 +95,17 @@ def preprocess_records(
     inputs.extend(_inputs)
     targets.extend(_target)
 
+    return {"inputs": inputs, "targets": targets}
+
+
+def preprocess_records(
+    tokenizer: AutoTokenizer, examples, padding_max_length=True, replace_pad_tokens=True
+):
+    pairs = format_prompt_output_pairs(examples)
+
     model_inputs = tokenizer(
-        inputs,
-        text_target=targets,
+        pairs["inputs"],
+        text_target=pairs["targets"],
         max_length=MAX_SEQ_LENGTH,
         truncation=True,
         padding="max_length" if padding_max_length else None,
