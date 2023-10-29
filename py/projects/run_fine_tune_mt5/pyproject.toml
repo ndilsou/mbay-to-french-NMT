@@ -1,12 +1,12 @@
 [tool.poetry]
-name = "run_fine_tune_t5"
+name = "run_fine_tune_mt5"
 version = "0.0.0"
 description = ""
 authors = ['ndilsou <nasoungadoy@gmail.com>']
 license = ""
 
 packages = [
-    { include = "mbay_nmt/fine_tune_t5", from = "../../bases" },
+    { include = "mbay_nmt/fine_tune_mt5", from = "../../bases" },
     { include = "mbay_nmt/training", from = "../../components" },
     { include = "mbay_nmt/utils", from = "../../components" },
 ]
