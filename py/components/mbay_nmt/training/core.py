@@ -7,10 +7,15 @@ import numpy as np
 from transformers import (
     AutoTokenizer,
     Trainer,
+    TrainerCallback,
+    TrainerState,
+    TrainerControl,
+    TrainingArguments,
 )
 
 from transformers.integrations import WandbCallback
 import pandas as pd
+from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
 
 PATTERN = re.compile(r"[/_\\]")
 
@@ -100,3 +105,24 @@ class WandbPredictionProgressCallback(WandbCallback):
         print(records_table)
         # log the table to wandb
         self._wandb.log({"sample_predictions": records_table})
+
+
+class SavePeftModelCallback(TrainerCallback):
+    def on_save(
+        self,
+        args: TrainingArguments,
+        state: TrainerState,
+        control: TrainerControl,
+        **kwargs,
+    ):
+        checkpoint_folder = os.path.join(
+            args.output_dir, f"{PREFIX_CHECKPOINT_DIR}-{state.global_step}"
+        )
+
+        peft_model_path = os.path.join(checkpoint_folder, "adapter_model")
+        kwargs["model"].save_pretrained(peft_model_path)
+
+        pytorch_model_path = os.path.join(checkpoint_folder, "pytorch_model.bin")
+        if os.path.exists(pytorch_model_path):
+            os.remove(pytorch_model_path)
+        return control

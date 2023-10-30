@@ -23,7 +23,10 @@ from transformers.trainer_utils import get_last_checkpoint
 
 from datasets import load_from_disk
 
-from mbay_nmt.training.core import WandbPredictionProgressCallback
+from mbay_nmt.training.core import (
+    SavePeftModelCallback,
+    WandbPredictionProgressCallback,
+)
 
 from . import utils
 
@@ -217,6 +220,7 @@ def training_function(args: Arguments):
         if get_last_checkpoint(args.output_dir) is not None
         else False,
         per_device_train_batch_size=args.per_device_train_batch_size,
+        # gradient_accumulation_steps=1,
         bf16=args.bf16,  # Use BF16 if available
         learning_rate=args.lr,
         num_train_epochs=args.epochs,
@@ -231,13 +235,16 @@ def training_function(args: Arguments):
         load_best_model_at_end=True,
         metric_for_best_model="bleu",
         save_strategy="steps",
-        save_steps=500,
-        # report_to="wandb" if args.wandb_token else None,
-        report_to="none",  # We manually add our custom wandb callback below.
+        # save_steps=500,
+        save_steps=50,  # DEBUG
+        report_to="wandb" if args.wandb_token else None,
+        # report_to="none",  # We manually add our custom wandb callback below.
         run_name=run_name,
         evaluation_strategy="steps",
-        eval_steps=250,
+        # eval_steps=250,
+        eval_steps=50, # DEBUG
     )
+
     # Create Trainer instance
     trainer = Trainer(
         model=model,
@@ -247,6 +254,7 @@ def training_function(args: Arguments):
         data_collator=default_data_collator,
         compute_metrics=partial(utils.compute_metrics, tokenizer),
         preprocess_logits_for_metrics=utils.preprocess_logits_for_metrics,
+        callbacks=[SavePeftModelCallback],
     )
     trainer.add_callback(EarlyStoppingCallback(early_stopping_patience=3))
 
