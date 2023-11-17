@@ -1,0 +1,66 @@
+[tool.poetry]
+name = "mbay_nmt"
+version = "0.1.0"
+description = ""
+authors = ["ndilsou <nasoungadoy@gmail.com>"]
+readme = "README.md"
+
+packages = [
+    { include = "development" },
+    { include = "mbay_nmt/fine_tune_mt5", from = "./bases" },
+    { include = "mbay_nmt/utils", from = "./components" },
+    { include = "mbay_nmt/preprocessing", from = "./components" },
+    { include = "mbay_nmt/training", from = "./components" },
+]
+
+[tool.poetry.dependencies]
+python = ">=3.10,<3.13"
+peft = "^0.5.0"
+transformers = { extras = ["torch"], version = "^4.34.0" }
+datasets = { extras = ["s3"], version = "^2.14.5" }
+sagemaker = "^2.191.0"
+gradio = "^3.47.1"
+boto3 = "^1.28.62"
+accelerate = "^0.23.0"
+evaluate = "^0.4.0"
+bitsandbytes = "^0.41.1"
+safetensors = "^0.4.0"
+pymongo = "^4.5.0"
+sacrebleu = "^2.3.1"
+pydantic = "^2.4.2"
+httpx = "^0.25.0"
+python-dotenv = "^1.0.0"
+rich = "^13.6.0"
+wandb = "^0.15.12"
+ninja = "^1.11.1"
+packaging = "^23.2"
+sentencepiece = "^0.1.99"
+nvidia-ml-py3 = "^7.352.0"
+scipy = "^1.11.3"
+rouge-score = "^0.1.2"
+gspread = "^5.11.3"
+oauth2client = "^4.1.3"
+langdetect = "^1.0.9"
+ratelimit = "^2.2.1"
+openai = "^0.28.1"
+
+
+[tool.poetry.group.dev.dependencies]
+jupyterlab = "^4.0.6"
+ipython = "^8.16.1"
+ruff = "^0.0.292"
+ipywidgets = "^8.1.1"
+jedi = "^0.19.1"
+poethepoet = "^0.24.1"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.ruff]
+line-length = 120
+
+[tool.poe.tasks]
+dev = "uvicorn require.api.main:app --reload"
+py = "python"
+build = "poetry build-project --directory"

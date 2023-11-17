@@ -6,7 +6,7 @@ authors = ['ndilsou <nasoungadoy@gmail.com>']
 license = ""
 
 packages = [
-    { include = "mbay_nmt/fine_tune_mt5", from = "../../bases" },
+    { include = "mbay_nmt/fine_tune_t5_family", from = "../../bases" },
     { include = "mbay_nmt/training", from = "../../components" },
     { include = "mbay_nmt/utils", from = "../../components" },
 ]

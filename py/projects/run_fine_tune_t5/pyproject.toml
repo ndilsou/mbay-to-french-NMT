@@ -1,0 +1,37 @@
+[tool.poetry]
+name = "run_fine_tune_t5"
+version = "0.0.0"
+description = ""
+authors = ['ndilsou <nasoungadoy@gmail.com>']
+license = ""
+
+packages = [
+    { include = "mbay_nmt/fine_tune_t5_family", from = "../../bases" },
+    { include = "mbay_nmt/training", from = "../../components" },
+    { include = "mbay_nmt/utils", from = "../../components" },
+]
+
+[tool.poetry.dependencies]
+python = ">=3.10,<3.13"
+peft = "^0.5.0"
+transformers = { extras = ["torch"], version = "^4.34.0" }
+datasets = { extras = ["s3"], version = "^2.14.5" }
+sagemaker = "^2.191.0"
+accelerate = "^0.23.0"
+evaluate = "^0.4.0"
+bitsandbytes = "^0.41.1"
+safetensors = "^0.4.0"
+sacrebleu = "^2.3.1"
+wandb = "^0.15.12"
+ninja = "^1.11.1"
+packaging = "^23.2"
+sentencepiece = "^0.1.99"
+scipy = "^1.11.3"
+rouge-score = "^0.1.2"
+nvidia-ml-py3 = "^7.352.0"
+
+[tool.poetry.group.dev.dependencies]
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
