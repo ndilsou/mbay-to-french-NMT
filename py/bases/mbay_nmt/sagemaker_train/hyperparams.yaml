@@ -1,0 +1,15 @@
+# Baseline hyperparameters for NLLB-600M Mbay fine-tuning.
+# Override via --key value CLI args to launch.py.
+
+epochs: 5
+batch-size: 8
+grad-accum: 4
+lr: 3e-5
+warmup-ratio: 0.05
+max-length: 128
+bf16: true
+gradient-checkpointing: true
+eval-steps: 500
+save-steps: 500
+early-stopping-patience: 5
+seed: 42
