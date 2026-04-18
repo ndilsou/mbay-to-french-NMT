@@ -35,7 +35,7 @@ def compute_metrics(tokenizer: AutoTokenizer, eval_preds):
     result_rouge = rouge.compute(predictions=decoded_preds, references=decoded_labels)
 
     result = {
-        "bleu": result_bleu["score"] * 100,
+        "bleu": result_bleu["score"],
         "rouge1": result_rouge["rouge1"] * 100,
         "rouge2": result_rouge["rouge2"] * 100,
         "rougeL": result_rouge["rougeL"] * 100,

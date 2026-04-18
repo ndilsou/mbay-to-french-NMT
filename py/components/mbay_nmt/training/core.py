@@ -34,9 +34,7 @@ def training_job_name(model_id: str) -> str:
 
 
 def decode_predictions(tokenizer, predictions, input_ids):
-    input_ids = np.where(
-        predictions.label_ids != -100, input_ids, tokenizer.pad_token_id
-    )
+    input_ids = np.where(input_ids != -100, input_ids, tokenizer.pad_token_id)
     prompt = tokenizer.batch_decode(input_ids, skip_special_tokens=True)
 
     label_ids = np.where(

@@ -45,6 +45,9 @@ class Arguments:
     dataset_path: str = field(
         default="/opt/ml/input/data/training", metadata={"help": "Path to dataset."}
     )
+    early_stopping_patience: int = field(
+        default=10, metadata={"help": "Early stopping patience."}
+    )
     warmup_ratio: float = field(default=0.02, metadata={"help": "Warmup ratio"})
     hf_token: str = field(default=None, metadata={"help": "Huggingface token"})
     wandb_token: str = field(default=None, metadata={"help": "WandB token"})
@@ -242,7 +245,7 @@ def training_function(args: Arguments):
         run_name=run_name,
         evaluation_strategy="steps",
         # eval_steps=250,
-        eval_steps=50, # DEBUG
+        eval_steps=50,  # DEBUG
     )
 
     # Create Trainer instance
@@ -256,7 +259,9 @@ def training_function(args: Arguments):
         preprocess_logits_for_metrics=utils.preprocess_logits_for_metrics,
         callbacks=[SavePeftModelCallback],
     )
-    trainer.add_callback(EarlyStoppingCallback(early_stopping_patience=3))
+    trainer.add_callback(
+        EarlyStoppingCallback(early_stopping_patience=args.early_stopping_patience)
+    )
 
     progress_callback = WandbPredictionProgressCallback(
         trainer=trainer,

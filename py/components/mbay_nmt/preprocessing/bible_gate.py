@@ -19,6 +19,7 @@ from collections import Counter
 from pathlib import Path
 
 import pandas as pd
+import regex
 
 # Known trivial substitutions: bible convention → Keegan convention.
 # MlL (2015) uses tilde-above for nasalization; Keegan uses tilde-below.
@@ -37,6 +38,12 @@ FATAL_CHARS = {
     "\u00f0",  # ð (eth) — legacy encoding
     "\u00f8",  # ø — legacy encoding
 }
+
+
+def _strip_combining(text: str) -> str:
+    """Strip all combining marks (tone, nasalization) to get base-form skeleton."""
+    nfd = unicodedata.normalize("NFD", text)
+    return unicodedata.normalize("NFC", regex.sub(r"\p{M}", "", nfd))
 
 
 def apply_trivial_subs(text: str) -> str:
@@ -116,23 +123,38 @@ def run_gate(
     overlap = bible_wt & keegan_wt
     overlap_pct = len(overlap) / max(len(bible_wt), 1) * 100
 
-    # Decision.
+    # Step 3b: Base-form overlap (strip all combining marks = tone-neutral).
+    # Catches the case where orthographies match at base level but differ
+    # in tone-marking density (e.g., bible under-marks tone vs dictionary).
+    bible_base = {_strip_combining(w) for w in bible_wt}
+    keegan_base = {_strip_combining(w) for w in keegan_wt}
+    base_overlap = bible_base & keegan_base
+    base_overlap_pct = len(base_overlap) / max(len(bible_base), 1) * 100
+
+    # Decision: use base-form overlap as the primary metric if strict is low
+    # but base-form suggests compatible orthography (tone-marking gap only).
     if fatal_word_pct > 1.0:
         decision = "reject"
         weight = 0.0
         reason = f"Fatal chars in {fatal_word_pct:.1f}% of word-types"
-    elif overlap_pct < 60:
-        decision = "reject"
-        weight = 0.0
-        reason = f"Lexical overlap {overlap_pct:.1f}% < 60% threshold"
-    elif overlap_pct < 80:
-        decision = "accept_low_weight"
-        weight = 0.3
-        reason = f"Lexical overlap {overlap_pct:.1f}% (60-80% range)"
-    else:
+    elif overlap_pct >= 80:
         decision = "accept"
         weight = 1.0
-        reason = f"Lexical overlap {overlap_pct:.1f}% ≥ 80%"
+        reason = f"Strict lexical overlap {overlap_pct:.1f}% ≥ 80%"
+    elif overlap_pct >= 60:
+        decision = "accept_low_weight"
+        weight = 0.3
+        reason = f"Strict lexical overlap {overlap_pct:.1f}% (60-80% range)"
+    elif base_overlap_pct >= 15:
+        # Strict overlap is low but base-forms match — tone-marking gap.
+        decision = "accept_low_weight"
+        weight = 0.3
+        reason = (f"Strict overlap {overlap_pct:.1f}% but base-form overlap "
+                  f"{base_overlap_pct:.1f}% — tone-marking density gap, not orthographic incompatibility")
+    else:
+        decision = "reject"
+        weight = 0.0
+        reason = f"Strict overlap {overlap_pct:.1f}%, base-form {base_overlap_pct:.1f}% — incompatible"
 
     return {
         "decision": decision,
@@ -144,6 +166,8 @@ def run_gate(
         "keegan_word_types": len(keegan_wt),
         "overlap_word_types": len(overlap),
         "overlap_pct": round(overlap_pct, 1),
+        "base_overlap_word_types": len(base_overlap),
+        "base_overlap_pct": round(base_overlap_pct, 1),
         "trivial_fixes": {k: repr(v) for k, v in trivial_fixes.items()},
         "fatal_mismatches": [(ch, name, count) for ch, name, count in fatal_mismatches],
         "bible_only_codepoints": len(bible_only),
@@ -161,7 +185,8 @@ def write_report(report: dict, path: Path) -> None:
         f"- Keegan Mbay entries: {report['keegan_entries']:,}",
         f"- Bible word-types (after normalization): {report['bible_word_types']:,}",
         f"- Keegan word-types: {report['keegan_word_types']:,}",
-        f"- Overlapping word-types: {report['overlap_word_types']:,} ({report['overlap_pct']}%)\n",
+        f"- Overlapping word-types (strict): {report['overlap_word_types']:,} ({report['overlap_pct']}%)",
+        f"- Overlapping word-types (base-form, tone-stripped): {report.get('base_overlap_word_types', 'N/A')} ({report.get('base_overlap_pct', 'N/A')}%)\n",
         f"## Character Analysis\n",
         f"- Bible-only codepoints: {report['bible_only_codepoints']}",
         f"- Keegan-only codepoints: {report['keegan_only_codepoints']}\n",
