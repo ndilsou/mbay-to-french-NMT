@@ -1,0 +1,7 @@
+torch==2.5.1+cpu --extra-index-url https://download.pytorch.org/whl/cpu
+transformers>=4.46
+sentencepiece>=0.2
+protobuf>=4.25
+fastapi>=0.115
+mangum>=0.19
+uvicorn>=0.32

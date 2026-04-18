@@ -26,6 +26,7 @@ def main():
     p.add_argument("--s3-model", required=True, help="S3 path to extended model dir")
     p.add_argument("--s3-output", required=True, help="S3 output path for artifacts")
     p.add_argument("--image-uri", default=None, help="ECR image URI (if not using SM built-in)")
+    p.add_argument("--role", default=None, help="IAM role ARN (auto-detected in SM notebooks)")
     p.add_argument("--instance", default="ml.g5.xlarge")
     p.add_argument("--spot", action="store_true", help="Use spot instances (~70% cheaper)")
     p.add_argument("--max-run-hours", type=int, default=6)
@@ -41,7 +42,19 @@ def main():
     from sagemaker.estimator import Estimator
 
     session = sagemaker.Session()
-    role = sagemaker.get_execution_role()
+    if args.role:
+        role = args.role
+    else:
+        try:
+            role = sagemaker.get_execution_role()
+        except ValueError:
+            import boto3
+            sts = boto3.client("sts")
+            identity = sts.get_caller_identity()
+            raise SystemExit(
+                f"Not in a SageMaker notebook. Pass --role explicitly.\n"
+                f"Current identity: {identity['Arn']}"
+            )
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     job_name = f"mbay-nllb-{timestamp}"
 
@@ -85,8 +98,8 @@ def main():
             max_wait=args.max_run_hours * 3600 + 1800 if args.spot else None,
             max_run=args.max_run_hours * 3600,
             output_path=args.s3_output,
-            transformers_version="4.46.0",
-            pytorch_version="2.5.0",
+            transformers_version="4.49.0",
+            pytorch_version="2.5.1",
             py_version="py311",
             hyperparameters=hyperparameters,
             sagemaker_session=session,
