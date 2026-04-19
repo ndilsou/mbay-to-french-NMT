@@ -164,11 +164,24 @@ def main():
 
     set_seed(args.seed)
 
+    # Auto-detect device: CUDA > MPS > CPU
+    use_mps = (not torch.cuda.is_available()
+               and torch.backends.mps.is_available())
+    if use_mps:
+        # MPS doesn't support bf16; use fp32 (fp16 has accuracy issues on M-series)
+        if args.bf16:
+            print("MPS detected: switching bf16→fp32 (MPS lacks bf16 support)")
+            args.bf16 = False
+
     tokenizer = AutoTokenizer.from_pretrained(args.model_dir)
     model = AutoModelForSeq2SeqLM.from_pretrained(
         args.model_dir,
         torch_dtype=torch.bfloat16 if args.bf16 else torch.float32,
     )
+
+    if use_mps:
+        model = model.to("mps")
+        print(f"Model on MPS ({torch.backends.mps.is_available()})")
 
     if args.gradient_checkpointing:
         model.gradient_checkpointing_enable()
@@ -210,6 +223,7 @@ def main():
         lr_scheduler_type="cosine",
         warmup_ratio=args.warmup_ratio,
         bf16=args.bf16,
+        fp16=False,
         gradient_checkpointing=args.gradient_checkpointing,
         eval_strategy="steps",
         eval_steps=args.eval_steps,
@@ -224,6 +238,8 @@ def main():
         run_name=f"nllb-mbay-{args.epochs}ep",
         predict_with_generate=True,
         generation_max_length=args.max_length,
+        # MPS: Trainer auto-detects mps device when CUDA absent
+        use_cpu=False,
     )
 
     trainer = Seq2SeqTrainer(
