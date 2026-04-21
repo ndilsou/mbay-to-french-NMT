@@ -69,3 +69,9 @@ target-version = "py311"
 typecheck = "ruff check ."
 fmt = "ruff format ."
 test = "pytest -n auto"
+build-project = { sequence = [
+  { shell = "uv export --no-hashes --no-header --no-dev --no-emit-workspace -o ./projects/${project}/requirements.txt" },
+  { shell = "uv build --wheel ./projects/${project}" },
+], args = [
+  { name = "project", positional = true },
+] }

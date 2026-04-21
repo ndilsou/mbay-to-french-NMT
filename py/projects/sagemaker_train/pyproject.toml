@@ -1,0 +1,43 @@
+[build-system]
+requires = ["hatchling", "hatch-polylith-bricks"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mbay-nmt-sagemaker-train"
+version = "0.2.0"
+requires-python = ">=3.11,<3.13"
+
+dependencies = [
+    "transformers[torch,sentencepiece]>=4.46.0,<5.0",
+    "peft>=0.13.0,<1.0",
+    "datasets>=3.0.0,<4.0",
+    "accelerate>=1.0.0,<2.0",
+    "evaluate>=0.4.3,<1.0",
+    "safetensors>=0.4.5,<1.0",
+    "sacrebleu>=2.4.3,<3.0",
+    "sentencepiece>=0.2.0,<1.0",
+    "tokenizers>=0.20.0,<1.0",
+    "rouge-score>=0.1.2,<1.0",
+    "scipy>=1.14.0,<2.0",
+    "pyarrow>=17.0.0,<18.0",
+    "pandas>=2.2.0,<3.0",
+]
+
+[project.optional-dependencies]
+launch = [
+    "sagemaker>=2.232.0,<3.0",
+    "boto3>=1.35.0,<2.0",
+]
+
+[tool.hatch.build.hooks.polylith-bricks]
+
+[tool.polylith.bricks]
+# Bases
+"../../bases/mbay_nmt/sagemaker_train" = "mbay_nmt/sagemaker_train"
+"../../bases/mbay_nmt/train_nllb" = "mbay_nmt/train_nllb"
+# Components
+"../../components/mbay_nmt/tokenizer" = "mbay_nmt/tokenizer"
+"../../components/mbay_nmt/training" = "mbay_nmt/training"
+
+[tool.hatch.build.targets.wheel]
+packages = ["mbay_nmt"]
