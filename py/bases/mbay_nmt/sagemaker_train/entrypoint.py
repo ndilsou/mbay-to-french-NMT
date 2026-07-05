@@ -18,8 +18,29 @@ SM_DATA_DIR = Path("/opt/ml/input/data")
 SM_CHECKPOINT_DIR = Path("/opt/ml/checkpoints")
 
 
+def _get_arg_value(name: str) -> str | None:
+    if name not in sys.argv:
+        return None
+    idx = sys.argv.index(name)
+    if idx + 1 >= len(sys.argv) or sys.argv[idx + 1].startswith("--"):
+        raise ValueError(f"{name} requires a value")
+    return sys.argv[idx + 1]
+
+
 def main():
-    data_path = SM_DATA_DIR / "training" / "mbay-corpus-v1.parquet"
+    training_dir = SM_DATA_DIR / "training"
+    corpus_file = _get_arg_value("--corpus-file")
+    if corpus_file:
+        data_path = training_dir / corpus_file
+        if not data_path.exists():
+            raise FileNotFoundError(f"--corpus-file {corpus_file!r} not found in {training_dir}")
+    else:
+        # Find parquet file in training channel (supports any corpus version).
+        parquets = sorted(training_dir.glob("mbay-corpus-*.parquet"))
+        if not parquets:
+            raise FileNotFoundError(f"No mbay-corpus-*.parquet found in {training_dir}")
+        data_path = parquets[-1]  # latest version
+    print(f"Using data: {data_path}")
     model_dir = SM_DATA_DIR / "model"
 
     # Build args for train_nllb.train.main()
@@ -32,7 +53,7 @@ def main():
 
     # Forward all SM hyperparams (passed as --key value by SageMaker).
     # Filter out the ones we already set.
-    skip = {"--model-dir", "--data", "--output-dir"}
+    skip = {"--model-dir", "--data", "--output-dir", "--corpus-file"}
     i = 1
     while i < len(sys.argv):
         arg = sys.argv[i]
