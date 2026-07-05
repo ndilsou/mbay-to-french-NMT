@@ -64,7 +64,12 @@ def roundtrip_similarity(bible_input: str, restored: str) -> float:
 
 @torch.no_grad()
 def restore_chunks(
-    model, tokenizer, chunks: list[str], device: str, batch_size: int = 32
+    model,
+    tokenizer,
+    chunks: list[str],
+    device: str,
+    batch_size: int = 32,
+    num_beams: int = 1,
 ) -> tuple[list[str], list[float]]:
     texts: list[str] = []
     confidences: list[float] = []
@@ -76,27 +81,41 @@ def restore_chunks(
         out = model.generate(
             **enc,
             max_new_tokens=512,
-            num_beams=1,
+            num_beams=num_beams,
             output_scores=True,
             return_dict_in_generate=True,
         )
         texts.extend(tokenizer.batch_decode(out.sequences, skip_special_tokens=True))
-        scores = model.compute_transition_scores(
-            out.sequences, out.scores, normalize_logits=True
-        )
-        mask = out.sequences[:, 1:] != tokenizer.pad_token_id
-        mean_logprob = (scores * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1)
-        confidences.extend(mean_logprob.exp().tolist())
+        if num_beams == 1:
+            scores = model.compute_transition_scores(
+                out.sequences, out.scores, normalize_logits=True
+            )
+            mask = out.sequences[:, 1:] != tokenizer.pad_token_id
+            mean_logprob = (scores * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1)
+            confidences.extend(mean_logprob.exp().tolist())
+        else:
+            confidences.extend(out.sequences_scores.exp().tolist())
     return texts, confidences
+
+
+def word_agreement(a: str, b: str) -> float:
+    aw, bw = a.split(), b.split()
+    if not aw and not bw:
+        return 1.0
+    matched = sum(x == y for x, y in zip(aw, bw))
+    return matched / max(len(aw), len(bw))
 
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("model_dir", type=Path)
+    parser.add_argument("--agreement-model", type=Path, default=None,
+                        help="second model; adds exact/word agreement columns")
     parser.add_argument("--corpus", type=Path, default=DEFAULT_CORPUS)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--batch-size", type=int, default=32)
+    parser.add_argument("--num-beams", type=int, default=1)
     args = parser.parse_args(argv)
 
     device = (
@@ -129,22 +148,38 @@ def main(argv: list[str] | None = None) -> None:
         flat_chunks.extend(chunks)
 
     restored_chunks, chunk_conf = restore_chunks(
-        model, tokenizer, flat_chunks, device, batch_size=args.batch_size
+        model, tokenizer, flat_chunks, device, batch_size=args.batch_size,
+        num_beams=args.num_beams,
     )
+
+    second_chunks: list[str] | None = None
+    if args.agreement_model:
+        del model
+        if device == "mps":
+            torch.mps.empty_cache()
+        elif device == "cuda":
+            torch.cuda.empty_cache()
+        tokenizer2 = AutoTokenizer.from_pretrained(args.agreement_model)
+        model2 = AutoModelForSeq2SeqLM.from_pretrained(args.agreement_model).to(device).eval()
+        second_chunks, _ = restore_chunks(
+            model2, tokenizer2, flat_chunks, device, batch_size=args.batch_size
+        )
 
     for (start, end), (_, row) in zip(spans, verses.iterrows(), strict=True):
         restored = "".join(restored_chunks[start:end])
-        conf = min(chunk_conf[start:end])
-        records.append(
-            {
-                "provenance": row["provenance"],
-                "bible_text": row["source_text"],
-                "restored_text": restored,
-                "confidence": conf,
-                "roundtrip_sim": roundtrip_similarity(row["source_text"], restored),
-                "n_chunks": end - start,
-            }
-        )
+        record = {
+            "provenance": row["provenance"],
+            "bible_text": row["source_text"],
+            "restored_text": restored,
+            "confidence": min(chunk_conf[start:end]),
+            "roundtrip_sim": roundtrip_similarity(row["source_text"], restored),
+            "n_chunks": end - start,
+        }
+        if second_chunks is not None:
+            second = "".join(second_chunks[start:end])
+            record["agreement"] = restored == second
+            record["word_agreement"] = word_agreement(restored, second)
+        records.append(record)
         if len(records) % 2000 == 0:
             print(f"  {len(records):,} verses done")
 
