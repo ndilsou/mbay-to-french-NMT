@@ -35,6 +35,7 @@ launch = [
 # Bases
 "../../bases/mbay_nmt/sagemaker_train" = "mbay_nmt/sagemaker_train"
 "../../bases/mbay_nmt/train_nllb" = "mbay_nmt/train_nllb"
+"../../bases/mbay_nmt/train_asr" = "mbay_nmt/train_asr"
 # Components
 "../../components/mbay_nmt/tokenizer" = "mbay_nmt/tokenizer"
 "../../components/mbay_nmt/training" = "mbay_nmt/training"
