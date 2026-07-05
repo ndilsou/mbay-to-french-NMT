@@ -215,8 +215,17 @@ Risks:
   (evaluate.py: word accuracy, skeleton preservation, real-verse samples),
   SageMaker entrypoint+launcher; own Polylith project
   `projects/tone_restore_train` (sagemaker_train untouched).
-- First SM run: job `mbay-tone-byt5-*`, ml.g5.xlarge spot, WandB project
-  `mbay-tone-restore`.
+- First SM run: `mbay-tone-byt5-20260705-125510` (byt5-small, 10 epochs,
+  g5.xlarge spot, ~60 min). **Results: word accuracy 86.0% val / 86.1% test**
+  (eval_loss 0.093), skeleton preserved 94.1% — beats the 85.4% bigram
+  baseline with zero grammar-rule injection; predicted ≥85-90% band hit.
+  Model: `py/models/tone-restore-byt5-sm` +
+  `s3://sagemaker-us-east-1-542301657622/mbay-tone/output/`.
+- Known failure mode: greedy decode repetition-loops on very long verses
+  (2/20 samples) — chunk verses at punctuation before restoring; do NOT use
+  byte-level no_repeat_ngram (corrupts legit repeated patterns, tested).
+- Next accuracy levers: function-word table postprocess, more epochs/byt5-base,
+  grammar-rule-constrained decoding, verse chunking, confidence gating.
 
 ## 5. External resources & open items
 
