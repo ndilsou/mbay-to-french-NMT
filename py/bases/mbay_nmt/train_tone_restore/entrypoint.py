@@ -62,7 +62,13 @@ def main() -> None:
 
     best_dir = SM_CHECKPOINT_DIR / "best"
     if best_dir.exists():
-        shutil.copytree(best_dir, SM_MODEL_DIR, dirs_exist_ok=True)
+        # spot checkpoint sync drops transient marker files mid-copy
+        shutil.copytree(
+            best_dir,
+            SM_MODEL_DIR,
+            dirs_exist_ok=True,
+            ignore=shutil.ignore_patterns("*.sagemaker-uploading", "*.sagemaker-uploaded"),
+        )
         print(f"Copied best tone-restore model to {SM_MODEL_DIR}")
 
 
