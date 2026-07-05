@@ -99,10 +99,13 @@ def restore_chunks(
 
 
 def word_agreement(a: str, b: str) -> float:
+    """Aligned word-level agreement (naive zip misaligns after one insertion)."""
     aw, bw = a.split(), b.split()
     if not aw and not bw:
         return 1.0
-    matched = sum(x == y for x, y in zip(aw, bw))
+    matched = sum(
+        block.size for block in difflib.SequenceMatcher(None, aw, bw).get_matching_blocks()
+    )
     return matched / max(len(aw), len(bw))
 
 
@@ -177,6 +180,7 @@ def main(argv: list[str] | None = None) -> None:
         }
         if second_chunks is not None:
             second = "".join(second_chunks[start:end])
+            record["second_text"] = second
             record["agreement"] = restored == second
             record["word_agreement"] = word_agreement(restored, second)
         records.append(record)
