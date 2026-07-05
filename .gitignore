@@ -334,3 +334,9 @@ data/**
 # local env files
 .env*.local
 .prompts
+# sagemaker launch staging + local model artifacts
+py/.sagemaker-staging/
+py/.sagemaker-asr-staging/
+py/models/
+py/AWSCLIV2.pkg
+py/datasets/processed/tone-restore-*.parquet
