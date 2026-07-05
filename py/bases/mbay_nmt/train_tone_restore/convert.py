@@ -73,7 +73,10 @@ def restore_chunks(
 ) -> tuple[list[str], list[float]]:
     texts: list[str] = []
     confidences: list[float] = []
-    for i in range(0, len(chunks), batch_size):
+    n_batches = (len(chunks) + batch_size - 1) // batch_size
+    for batch_idx, i in enumerate(range(0, len(chunks), batch_size)):
+        if batch_idx % 20 == 0:
+            print(f"restore_chunks: batch {batch_idx}/{n_batches}", flush=True)
         batch = chunks[i : i + batch_size]
         enc = tokenizer(
             batch, return_tensors="pt", padding=True, truncation=True, max_length=512
