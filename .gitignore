@@ -337,6 +337,7 @@ data/**
 # sagemaker launch staging + local model artifacts
 py/.sagemaker-staging/
 py/.sagemaker-asr-staging/
+py/.sagemaker-tone-staging/
 py/models/
 py/AWSCLIV2.pkg
 py/datasets/processed/tone-restore-*.parquet
