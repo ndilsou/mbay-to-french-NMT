@@ -33,17 +33,35 @@ diacritics onto the 1980 ABT bible text. Background: `MBAY_GRAMMAR.md`,
   nouns — invisible to all automatic gates; needs the ~100-verse gold set for
   a true bible-domain accuracy number
 
+## Final distributions (real bible, 30,697 verses)
+
+Domain shift is real: cross-model word agreement median 0.60 on bible text
+(vs high on dictionary-domain), concentrated in tone choices on dialect
+items/OOV. Agreement is a conservative lower bound on correctness (the
+reference model is the weaker one).
+
+| gate | keeps |
+|---|---|
+| `roundtrip_sim ≥ 0.90` (source-grade) | 20,384 (66%) |
+| `word_agreement ≥ 0.7 AND roundtrip_sim ≥ 0.95` | 6,718 (22%) |
+| `word_agreement ≥ 0.8 AND roundtrip_sim ≥ 0.95` | 2,842 (9%) |
+| `word_agreement ≥ 0.9 AND roundtrip_sim ≥ 0.95` | 543 (2%) |
+
 ## Recommended usage (NMT enrichment)
 
-1. **mbay→X source side**: use `restored_text` for all verses with
-   `roundtrip_sim ≥ 0.90` (drops garbled restorations). Tone noise on the
-   source side is benign.
-2. **X→mbay target side** (the valuable new direction): weight or filter by
-   `word_agreement` — e.g. keep `word_agreement ≥ 0.9 AND roundtrip_sim ≥ 0.95`
-   for the clean tier; optionally down-weight the rest rather than dropping.
-3. Keep the original untoned rows too (dual-register training data is free
+1. **mbay→X source side**: use `restored_text` where `roundtrip_sim ≥ 0.90`
+   (66%, ~20K verses). Tone noise on the source side is benign; this is the
+   safe, immediate win.
+2. **X→mbay target side**: start conservative — `word_agreement ≥ 0.7 AND
+   roundtrip_sim ≥ 0.95` (~6.7K verses) with per-sample weight
+   `word_agreement`, alongside the (much cleaner) dictionary-domain rows.
+   Escalate only after the gold-set check (below).
+3. **Before scaling target-side use**: hand-check ~100 verses sampled across
+   `word_agreement` bands to measure true bible-domain accuracy — the
+   dictionary-domain 86-91% does NOT transfer 1:1 (this data shows it).
+4. Keep the original untoned rows too (dual-register training data is free
    robustness), but never mix registers within one target sentence.
-4. Proper nouns: restored forms of biblical names are model inventions
+5. Proper nouns: restored forms of biblical names are model inventions
    (`Jō-hánáǹ`) — harmless for NMT but don't treat as lexicon entries.
 
 ## Known limitations
@@ -73,7 +91,7 @@ Poll `py/datasets/processed/bible-restored.READY.json`:
              "word_agreement"],
   "recommended_gates": {
     "source_side": "roundtrip_sim >= 0.90",
-    "target_side": "word_agreement >= 0.90 and roundtrip_sim >= 0.95"
+    "target_side": "word_agreement >= 0.70 and roundtrip_sim >= 0.95"
   },
   "docs": "notes/BIBLE_RESTORED_HANDOFF.md",
   "git_commit": "<commit of pipeline code>",
