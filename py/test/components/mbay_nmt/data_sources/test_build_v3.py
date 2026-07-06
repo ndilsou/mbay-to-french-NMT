@@ -323,4 +323,4 @@ def test_verify_restored_bible_ready_fails_on_sha_mismatch(tmp_path):
 def test_nfc_strip_folds_typographic_punctuation_to_tokenizer_safe_ascii():
     from mbay_nmt.data_sources.build_v3 import nfc_strip
 
-    assert nfc_strip("l’Éternel dit: “va” – attends…") == "l'Éternel dit: \"va\" - attends…"
+    assert nfc_strip("l’Éternel dit: “va” – « attends »…") == "l'Éternel dit: \"va\" - \" attends \"…"

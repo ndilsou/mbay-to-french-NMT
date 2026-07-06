@@ -100,6 +100,7 @@ PUNCT_TOKEN_RE = re.compile(r"(?:^|\s)[;:,.]+\s*(?=$|\s)")
 PUNCT_NORM = str.maketrans({
     "’": "'", "‘": "'", "ʼ": "'",  # curly/modifier apostrophes -> ASCII
     "“": '"', "”": '"',
+    "«": '"', "»": '"',
     "–": "-", "—": "-",
     " ": " ",
 })
