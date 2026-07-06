@@ -9,7 +9,9 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import itertools
+import json
 import re
 import unicodedata
 from pathlib import Path
@@ -18,6 +20,20 @@ import pandas as pd
 
 DICTIONARY_DOMAINS = {"example", "lexicon", "expression"}
 BIBLE_PROVENANCE_RE = re.compile(r"^bible:MlL:([^.]+)\.\d+\.\d+$")
+RESTORED_BIBLE_COLUMNS = {
+    "provenance",
+    "bible_text",
+    "restored_text",
+    "confidence",
+    "roundtrip_sim",
+    "n_chunks",
+    "second_text",
+    "agreement",
+    "word_agreement",
+}
+V32_SOURCE_ROUNDTRIP_MIN = 0.90
+V32_FLIP_WORD_AGREEMENT_MIN = 0.90
+V32_FLIP_ROUNDTRIP_MIN = 0.95
 V31_OT_NARRATIVE_BOOKS = {
     "GEN",
     "EXO",
@@ -81,11 +97,24 @@ ORPHAN_BRACKET_RE = re.compile(r"[\[\]]")
 PUNCT_TOKEN_RE = re.compile(r"(?:^|\s)[;:,.]+\s*(?=$|\s)")
 
 
+PUNCT_NORM = str.maketrans({
+    "’": "'", "‘": "'", "ʼ": "'",  # curly/modifier apostrophes -> ASCII
+    "“": '"', "”": '"',
+    "–": "-", "—": "-",
+    " ": " ",
+})
+
+
 def nfc_strip(text: object) -> str:
-    """NFC-normalize string-ish text and strip outer whitespace."""
+    """NFC-normalize string-ish text, fold typographic punctuation, strip whitespace.
+
+    The NLLB tokenizer maps U+2019 (curly apostrophe) to <unk>; the French
+    bible uses it everywhere, which silently deleted apostrophes from training
+    labels. Fold to ASCII before tokenization ever sees the text.
+    """
     if not isinstance(text, str):
         return ""
-    return unicodedata.normalize("NFC", text).strip()
+    return unicodedata.normalize("NFC", text).translate(PUNCT_NORM).strip()
 
 
 def collapse_whitespace(text: str) -> str:
@@ -284,13 +313,136 @@ def _drop_train_eval_pair_leakage(df: pd.DataFrame) -> tuple[pd.DataFrame, int]:
     return df, dropped
 
 
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def verify_restored_bible_ready(restored_bible_path: str | Path) -> None:
+    restored_path = Path(restored_bible_path)
+    if not restored_path.exists():
+        raise FileNotFoundError(
+            f"Restored bible parquet not found: {restored_path}. "
+            "v3.2 requires the READY contract in notes/BIBLE_RESTORED_HANDOFF.md "
+            "and py/datasets/processed/bible-restored.parquet."
+        )
+
+    ready_path = restored_path.with_suffix(".READY.json")
+    if not ready_path.exists():
+        print(
+            f"WARNING: {ready_path} is absent; continuing via manual override. "
+            "See notes/BIBLE_RESTORED_HANDOFF.md READY contract."
+        )
+        return
+
+    with ready_path.open("r", encoding="utf-8") as handle:
+        ready = json.load(handle)
+    if ready.get("status") != "ready":
+        raise ValueError(f"{ready_path} status is not ready: {ready.get('status')!r}")
+
+    expected_sha = ready.get("sha256")
+    actual_sha = _sha256_file(restored_path)
+    if expected_sha != actual_sha:
+        raise ValueError(
+            f"{ready_path} sha256 mismatch for {restored_path}: "
+            f"expected {expected_sha!r}, got {actual_sha!r}"
+        )
+
+
+def _load_restored_bible(restored_bible_path: str | Path) -> pd.DataFrame:
+    restored = pd.read_parquet(restored_bible_path)
+    missing = RESTORED_BIBLE_COLUMNS - set(restored.columns)
+    if missing:
+        raise ValueError(f"Restored bible parquet is missing columns: {sorted(missing)}")
+
+    restored = restored.copy()
+    restored["provenance"] = restored["provenance"].map(nfc_strip)
+    restored["restored_text"] = restored["restored_text"].map(nfc_strip)
+    restored = restored.drop_duplicates("provenance", keep="first")
+    return restored
+
+
+def apply_v32_restored_bible(
+    df: pd.DataFrame,
+    restored_bible_path: str | Path,
+    *,
+    flip_word_agreement_min: float = V32_FLIP_WORD_AGREEMENT_MIN,
+    flip_roundtrip_min: float = V32_FLIP_ROUNDTRIP_MIN,
+) -> tuple[pd.DataFrame, dict[str, int]]:
+    restored = _load_restored_bible(restored_bible_path)
+    restored_by_provenance = restored.set_index("provenance")
+
+    train_bible_mask = (df["split"] == "train") & (df["domain"] == "bible")
+    train_bible = df.loc[train_bible_mask].copy()
+    joined = train_bible.join(
+        restored_by_provenance[["restored_text", "roundtrip_sim", "word_agreement"]],
+        on="provenance",
+        how="left",
+    )
+
+    has_restored = joined["restored_text"].map(lambda value: isinstance(value, str) and len(value) > 0)
+    source_gate = has_restored & (joined["roundtrip_sim"] >= V32_SOURCE_ROUNDTRIP_MIN)
+    flip_gate = (
+        has_restored
+        & (joined["word_agreement"] >= flip_word_agreement_min)
+        & (joined["roundtrip_sim"] >= flip_roundtrip_min)
+    )
+
+    train_bible_verses = train_bible["provenance"].nunique()
+    restored_verses = joined.loc[has_restored, "provenance"].nunique()
+    source_gate_verses = joined.loc[source_gate, "provenance"].nunique()
+    flip_gate_verses = joined.loc[flip_gate, "provenance"].nunique()
+    counts = {
+        "v32_train_bible_verses": int(train_bible_verses),
+        "v32_restored_verses_joined": int(restored_verses),
+        "v32_source_gate_verses_in": int(source_gate_verses),
+        "v32_source_gate_verses_out": int(restored_verses - source_gate_verses),
+        "v32_flip_gate_verses_in": int(flip_gate_verses),
+        "v32_flip_gate_verses_out": int(restored_verses - flip_gate_verses),
+        "added_v32_restored_source": 0,
+        "added_v32_restored_flip": 0,
+    }
+
+    additions: list[pd.DataFrame] = []
+    source_additions = joined.loc[source_gate, df.columns].copy()
+    if not source_additions.empty:
+        source_additions["source_text"] = joined.loc[source_gate, "restored_text"].to_numpy()
+        source_additions["provenance"] = "restored:" + source_additions["provenance"].astype(str)
+        counts["added_v32_restored_source"] = len(source_additions)
+        additions.append(source_additions)
+
+    flip_additions = joined.loc[flip_gate, df.columns].copy()
+    if not flip_additions.empty:
+        flip_additions[["source_lang", "target_lang"]] = flip_additions[["target_lang", "source_lang"]].to_numpy()
+        flip_additions["source_text"] = joined.loc[flip_gate, "target_text"].to_numpy()
+        flip_additions["target_text"] = joined.loc[flip_gate, "restored_text"].to_numpy()
+        flip_additions["provenance"] = "restored-flip:" + flip_additions["provenance"].astype(str)
+        counts["added_v32_restored_flip"] = len(flip_additions)
+        additions.append(flip_additions)
+
+    if additions:
+        df = pd.concat([df, *additions], ignore_index=True)
+    return df, counts
+
+
 def build_v3(
     input_path: str | Path,
     *,
     no_notone_aug: bool = False,
     v31: bool = False,
+    v32: bool = False,
+    restored_bible_path: str | Path = "datasets/processed/bible-restored.parquet",
+    v32_flip_wa: float = V32_FLIP_WORD_AGREEMENT_MIN,
+    v32_flip_rt: float = V32_FLIP_ROUNDTRIP_MIN,
     seed: int = 42,
 ) -> tuple[pd.DataFrame, dict[str, int]]:
+    v31 = v31 or v32
+    if v32:
+        verify_restored_bible_ready(restored_bible_path)
+
     df = pd.read_parquet(input_path)
     required_cols = {
         "source_lang",
@@ -369,6 +521,15 @@ def build_v3(
         )
         df, counts["dropped_v31_lexicon_train_downsample"] = _downsample_v31_lexicon_train(df, seed=seed)
 
+    if v32:
+        df, v32_counts = apply_v32_restored_bible(
+            df,
+            restored_bible_path,
+            flip_word_agreement_min=v32_flip_wa,
+            flip_roundtrip_min=v32_flip_rt,
+        )
+        counts.update(v32_counts)
+
     flip_mask = (df["source_lang"] == "mbay") & df["domain"].isin(DICTIONARY_DOMAINS)
     flipped = df.loc[flip_mask].copy()
     if not flipped.empty:
@@ -407,19 +568,41 @@ def main() -> None:
     parser.add_argument("--output", default=None, help="Output parquet path")
     parser.add_argument("--no-notone-aug", action="store_true", help="Disable tone-stripped train augmentation")
     parser.add_argument("--v31", action="store_true", help="Build corpus v3.1 with book-level bible holdout and tags")
+    parser.add_argument("--v32", action="store_true", help="Build corpus v3.2 with restored bible train additions")
+    parser.add_argument(
+        "--restored-bible",
+        default="datasets/processed/bible-restored.parquet",
+        help="Restored bible parquet for --v32",
+    )
+    parser.add_argument("--v32-flip-wa", type=float, default=V32_FLIP_WORD_AGREEMENT_MIN)
+    parser.add_argument("--v32-flip-rt", type=float, default=V32_FLIP_ROUNDTRIP_MIN)
     parser.add_argument("--seed", type=int, default=42, help="Seed for v3.1 deterministic sampling")
     args = parser.parse_args()
 
     input_path = Path(args.input)
+    default_output = "datasets/processed/mbay-corpus-v3.parquet"
+    if args.v32:
+        default_output = "datasets/processed/mbay-corpus-v3.2.parquet"
+    elif args.v31:
+        default_output = "datasets/processed/mbay-corpus-v3.1.parquet"
     output_path = Path(
         args.output
-        or ("datasets/processed/mbay-corpus-v3.1.parquet" if args.v31 else "datasets/processed/mbay-corpus-v3.parquet")
+        or default_output
     )
 
     before = pd.read_parquet(input_path)
     _print_stats_table("Rows before", before)
 
-    after, counts = build_v3(input_path, no_notone_aug=args.no_notone_aug, v31=args.v31, seed=args.seed)
+    after, counts = build_v3(
+        input_path,
+        no_notone_aug=args.no_notone_aug,
+        v31=args.v31,
+        v32=args.v32,
+        restored_bible_path=args.restored_bible,
+        v32_flip_wa=args.v32_flip_wa,
+        v32_flip_rt=args.v32_flip_rt,
+        seed=args.seed,
+    )
 
     print("\nFilter/addition counts")
     for name, count in counts.items():
