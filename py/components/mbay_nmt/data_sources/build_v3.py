@@ -13,6 +13,7 @@ import hashlib
 import itertools
 import json
 import re
+import string
 import unicodedata
 from pathlib import Path
 
@@ -31,9 +32,20 @@ RESTORED_BIBLE_COLUMNS = {
     "agreement",
     "word_agreement",
 }
+CORPUS_COLUMNS = [
+    "source_lang",
+    "target_lang",
+    "source_text",
+    "target_text",
+    "domain",
+    "provenance",
+    "split",
+]
 V32_SOURCE_ROUNDTRIP_MIN = 0.90
 V32_FLIP_WORD_AGREEMENT_MIN = 0.90
 V32_FLIP_ROUNDTRIP_MIN = 0.95
+V32_BASIC_ALLOWED_CHARS = set(string.digits + string.punctuation + string.whitespace)
+V34_FLIP_WORD_AGREEMENT_MIN = 0.75
 V31_OT_NARRATIVE_BOOKS = {
     "GEN",
     "EXO",
@@ -95,6 +107,13 @@ REF_CLUSTER_RE = re.compile(
 BRACKETED_RE = re.compile(r"\[[^\]]*\]")
 ORPHAN_BRACKET_RE = re.compile(r"[\[\]]")
 PUNCT_TOKEN_RE = re.compile(r"(?:^|\s)[;:,.]+\s*(?=$|\s)")
+BIBLE_APPARATUS_RE = re.compile(r"\b(?:for\s+ver\.?|see\s+ver\.?|see\s+ch\.?)\b", flags=re.IGNORECASE)
+BIBLE_INITIAL_OR_PUNCT_INT_RUN_RE = re.compile(r"(?:^|[.!?;:,]\s*)\b\d+\s+\d+\b")
+EXAMPLE_LIT_SUFFIX_RE = re.compile(r"\s*\[[Ll]it:? [^\]]*\]\s*$")
+EXAMPLE_EQUALS_SUFFIX_RE = re.compile(r"\s*\(=[^)]*\)\s*$")
+REPLAY_URL_RE = re.compile(r"http", flags=re.IGNORECASE)
+WORD_TOKEN_RE = re.compile(r"\S+")
+SENTENCE_FINAL_RE = re.compile(r"[.!?…][\"')\]]*$")
 
 
 PUNCT_NORM = str.maketrans({
@@ -138,6 +157,93 @@ def clean_bible_target(text: object) -> str:
         cleaned = PUNCT_TOKEN_RE.sub(" ", cleaned)
         cleaned = collapse_whitespace(cleaned)
     return cleaned.strip(" ;:,")
+
+
+def bible_target_is_mostly_digits_punct(text: object) -> bool:
+    target = nfc_strip(text)
+    if len(target) >= 15 or not target:
+        return False
+    digit_punct_space = sum(ch.isdigit() or ch in string.punctuation or ch.isspace() for ch in target)
+    return digit_punct_space / len(target) >= 0.6
+
+
+def bible_target_lacks_final_punctuation(text: object) -> bool:
+    target = nfc_strip(text).rstrip()
+    if not target:
+        return False
+    return SENTENCE_FINAL_RE.search(target) is None
+
+
+def clean_example_expression_target(text: object) -> str:
+    """Strip trailing dictionary gloss suffixes from example/expression targets."""
+    cleaned = nfc_strip(text)
+    previous = None
+    while cleaned != previous:
+        previous = cleaned
+        cleaned = EXAMPLE_LIT_SUFFIX_RE.sub("", cleaned)
+        cleaned = EXAMPLE_EQUALS_SUFFIX_RE.sub("", cleaned)
+        cleaned = cleaned.strip()
+    return cleaned
+
+
+def _tokenize_for_repetition(text: object) -> list[str]:
+    tokens = []
+    for token in WORD_TOKEN_RE.findall(nfc_strip(text).lower()):
+        stripped = token.strip(string.punctuation)
+        if stripped:
+            tokens.append(stripped)
+    return tokens
+
+
+def restored_text_has_repetition_failure(text: object) -> bool:
+    tokens = _tokenize_for_repetition(text)
+    if len(tokens) > 6:
+        max_token_count = max(tokens.count(token) for token in set(tokens))
+        if max_token_count / len(tokens) > 0.4:
+            return True
+    if len(tokens) < 6:
+        return False
+    four_gram_counts: dict[tuple[str, ...], int] = {}
+    for index in range(len(tokens) - 3):
+        gram = tuple(tokens[index : index + 4])
+        four_gram_counts[gram] = four_gram_counts.get(gram, 0) + 1
+        if four_gram_counts[gram] >= 3:
+            return True
+    return False
+
+
+def _word_count(text: object) -> int:
+    return len(WORD_TOKEN_RE.findall(nfc_strip(text)))
+
+
+def _replay_drop_mask(df: pd.DataFrame) -> pd.Series:
+    source = df["source_text"].map(nfc_strip)
+    target = df["target_text"].map(nfc_strip)
+    source_len = source.str.len()
+    target_len = target.str.len()
+    ratio = source_len / target_len.clip(lower=1)
+    return (
+        source.str.contains("¶", regex=False)
+        | target.str.contains("¶", regex=False)
+        | source.str.contains("BAR", regex=False)
+        | target.str.contains("BAR", regex=False)
+        | source.str.contains(REPLAY_URL_RE, na=False)
+        | target.str.contains(REPLAY_URL_RE, na=False)
+        | source.str.startswith("-")
+        | target.str.startswith("-")
+        | (ratio < 0.5)
+        | (ratio > 2.0)
+        | (source.map(_word_count) < 3)
+        | (target.map(_word_count) < 3)
+    )
+
+
+def filter_replay(df: pd.DataFrame) -> pd.DataFrame:
+    """Drop replay rows with document artifacts or weak sentence-pair shape."""
+    out = df.copy()
+    out["source_text"] = out["source_text"].map(nfc_strip)
+    out["target_text"] = out["target_text"].map(nfc_strip)
+    return out.loc[~_replay_drop_mask(out)].reset_index(drop=True)
 
 
 def strip_combining_marks(text: str) -> str:
@@ -246,6 +352,29 @@ def _downsample_v31_lexicon_train(df: pd.DataFrame, *, seed: int) -> tuple[pd.Da
     drop_mask = lexicon_train_mask & ~df.index.isin(kept_indices)
     dropped = int(drop_mask.sum())
     return df.loc[~drop_mask].reset_index(drop=True), dropped
+
+
+def _load_extra_train_rows(extra_path: str | Path, *, label: str, required: bool = True) -> pd.DataFrame | None:
+    path = Path(extra_path)
+    if not path.exists():
+        if required:
+            raise FileNotFoundError(f"{label} parquet not found: {path}")
+        print(f"WARNING: {label} parquet not found at {path}; skipping.")
+        return None
+
+    extra = pd.read_parquet(path)
+    required_cols = set(CORPUS_COLUMNS)
+    missing = required_cols - set(extra.columns)
+    if missing:
+        raise ValueError(f"{label} parquet is missing columns: {sorted(missing)}")
+    non_train = extra[extra["split"] != "train"]
+    if not non_train.empty:
+        examples = non_train[["source_lang", "target_lang", "split", "provenance"]].head(5).to_dict("records")
+        raise AssertionError(f"{label} rows must be train-only; examples={examples!r}")
+    extra = extra.loc[:, CORPUS_COLUMNS].copy()
+    extra["source_text"] = extra["source_text"].map(nfc_strip)
+    extra["target_text"] = extra["target_text"].map(nfc_strip)
+    return extra.reset_index(drop=True)
 
 
 def _format_book_counts(books: tuple[str, str], book_counts: dict[str, int]) -> str:
@@ -366,6 +495,21 @@ def _load_restored_bible(restored_bible_path: str | Path) -> pd.DataFrame:
     return restored
 
 
+def build_v32_restored_mbay_char_whitelist(df: pd.DataFrame) -> set[str]:
+    """Allow restored Mbay glyphs seen in original train dictionary Mbay text."""
+    whitelist = set(V32_BASIC_ALLOWED_CHARS)
+    train_dictionary = (df["split"] == "train") & df["domain"].isin(DICTIONARY_DOMAINS)
+    for lang_col, text_col in [("source_lang", "source_text"), ("target_lang", "target_text")]:
+        mbay_text = df.loc[train_dictionary & (df[lang_col] == "mbay"), text_col]
+        for text in mbay_text:
+            whitelist.update(nfc_strip(text))
+    return whitelist
+
+
+def restored_text_disallowed_chars(text: object, whitelist: set[str]) -> set[str]:
+    return {ch for ch in nfc_strip(text) if ch not in whitelist}
+
+
 def apply_v32_restored_bible(
     df: pd.DataFrame,
     restored_bible_path: str | Path,
@@ -375,6 +519,7 @@ def apply_v32_restored_bible(
 ) -> tuple[pd.DataFrame, dict[str, int]]:
     restored = _load_restored_bible(restored_bible_path)
     restored_by_provenance = restored.set_index("provenance")
+    restored_mbay_whitelist = build_v32_restored_mbay_char_whitelist(df)
 
     train_bible_mask = (df["split"] == "train") & (df["domain"] == "bible")
     train_bible = df.loc[train_bible_mask].copy()
@@ -391,6 +536,16 @@ def apply_v32_restored_bible(
         & (joined["word_agreement"] >= flip_word_agreement_min)
         & (joined["roundtrip_sim"] >= flip_roundtrip_min)
     )
+    whitelist_safe = joined["restored_text"].map(
+        lambda value: not restored_text_disallowed_chars(value, restored_mbay_whitelist)
+    )
+    repetition_safe = ~joined["restored_text"].map(restored_text_has_repetition_failure)
+    source_whitelist_drop = source_gate & ~whitelist_safe
+    flip_whitelist_drop = flip_gate & ~whitelist_safe
+    source_repetition_drop = source_gate & whitelist_safe & ~repetition_safe
+    flip_repetition_drop = flip_gate & whitelist_safe & ~repetition_safe
+    source_add_gate = source_gate & whitelist_safe & repetition_safe
+    flip_add_gate = flip_gate & whitelist_safe & repetition_safe
 
     train_bible_verses = train_bible["provenance"].nunique()
     restored_verses = joined.loc[has_restored, "provenance"].nunique()
@@ -403,23 +558,27 @@ def apply_v32_restored_bible(
         "v32_source_gate_verses_out": int(restored_verses - source_gate_verses),
         "v32_flip_gate_verses_in": int(flip_gate_verses),
         "v32_flip_gate_verses_out": int(restored_verses - flip_gate_verses),
+        "dropped_v32_restored_source_non_whitelist": int(source_whitelist_drop.sum()),
+        "dropped_v32_restored_flip_non_whitelist": int(flip_whitelist_drop.sum()),
+        "dropped_v32_restored_source_repetition": int(source_repetition_drop.sum()),
+        "dropped_v32_restored_flip_repetition": int(flip_repetition_drop.sum()),
         "added_v32_restored_source": 0,
         "added_v32_restored_flip": 0,
     }
 
     additions: list[pd.DataFrame] = []
-    source_additions = joined.loc[source_gate, df.columns].copy()
+    source_additions = joined.loc[source_add_gate, df.columns].copy()
     if not source_additions.empty:
-        source_additions["source_text"] = joined.loc[source_gate, "restored_text"].to_numpy()
+        source_additions["source_text"] = joined.loc[source_add_gate, "restored_text"].to_numpy()
         source_additions["provenance"] = "restored:" + source_additions["provenance"].astype(str)
         counts["added_v32_restored_source"] = len(source_additions)
         additions.append(source_additions)
 
-    flip_additions = joined.loc[flip_gate, df.columns].copy()
+    flip_additions = joined.loc[flip_add_gate, df.columns].copy()
     if not flip_additions.empty:
         flip_additions[["source_lang", "target_lang"]] = flip_additions[["target_lang", "source_lang"]].to_numpy()
-        flip_additions["source_text"] = joined.loc[flip_gate, "target_text"].to_numpy()
-        flip_additions["target_text"] = joined.loc[flip_gate, "restored_text"].to_numpy()
+        flip_additions["source_text"] = joined.loc[flip_add_gate, "target_text"].to_numpy()
+        flip_additions["target_text"] = joined.loc[flip_add_gate, "restored_text"].to_numpy()
         flip_additions["provenance"] = "restored-flip:" + flip_additions["provenance"].astype(str)
         counts["added_v32_restored_flip"] = len(flip_additions)
         additions.append(flip_additions)
@@ -435,25 +594,23 @@ def build_v3(
     no_notone_aug: bool = False,
     v31: bool = False,
     v32: bool = False,
+    v34: bool = False,
     restored_bible_path: str | Path = "datasets/processed/bible-restored.parquet",
-    v32_flip_wa: float = V32_FLIP_WORD_AGREEMENT_MIN,
+    v32_flip_wa: float | None = None,
     v32_flip_rt: float = V32_FLIP_ROUNDTRIP_MIN,
+    codeswitch_path: str | Path | None = None,
+    replay_path: str | Path | None = None,
     seed: int = 42,
 ) -> tuple[pd.DataFrame, dict[str, int]]:
+    v32 = v32 or v34
     v31 = v31 or v32
+    if v32_flip_wa is None:
+        v32_flip_wa = V34_FLIP_WORD_AGREEMENT_MIN if v34 else V32_FLIP_WORD_AGREEMENT_MIN
     if v32:
         verify_restored_bible_ready(restored_bible_path)
 
     df = pd.read_parquet(input_path)
-    required_cols = {
-        "source_lang",
-        "target_lang",
-        "source_text",
-        "target_text",
-        "domain",
-        "provenance",
-        "split",
-    }
+    required_cols = set(CORPUS_COLUMNS)
     missing = required_cols - set(df.columns)
     if missing:
         raise ValueError(f"Input corpus is missing columns: {sorted(missing)}")
@@ -462,11 +619,21 @@ def build_v3(
     counts: dict[str, int] = {
         "dropped_bible_short_target": 0,
         "dropped_bible_remaining_ref": 0,
+        "dropped_bible_apparatus_remnant": 0,
+        "dropped_bible_initial_integer_run": 0,
+        "dropped_bible_mostly_digits_punct": 0,
+        "dropped_bible_truncated_target": 0,
+        "bible_truncation_threshold_chars": 30,
         "dropped_bible_length_ratio": 0,
+        "cleaned_example_expression_gloss_suffix": 0,
         "dropped_empty_after_hygiene": 0,
         "dropped_exact_dupes": 0,
         "dropped_train_eval_pair_leakage": 0,
         "added_flipped_dictionary": 0,
+        "added_v34_full_flipped_train_lexicon": 0,
+        "added_codeswitch": 0,
+        "added_replay": 0,
+        "dropped_replay_filter": 0,
         "added_notone_train": 0,
     }
 
@@ -475,6 +642,32 @@ def build_v3(
     remaining_ref_mask = bible_mask & df["target_text"].str.contains(VERSE_REF_RE, na=False)
     counts["dropped_bible_remaining_ref"] = int(remaining_ref_mask.sum())
     df = df.loc[~remaining_ref_mask].reset_index(drop=True)
+
+    bible_mask = df["domain"] == "bible"
+    apparatus_mask = bible_mask & df["target_text"].str.contains(BIBLE_APPARATUS_RE, na=False)
+    counts["dropped_bible_apparatus_remnant"] = int(apparatus_mask.sum())
+    df = df.loc[~apparatus_mask].reset_index(drop=True)
+
+    bible_mask = df["domain"] == "bible"
+    integer_run_mask = bible_mask & df["target_text"].str.contains(BIBLE_INITIAL_OR_PUNCT_INT_RUN_RE, na=False)
+    counts["dropped_bible_initial_integer_run"] = int(integer_run_mask.sum())
+    df = df.loc[~integer_run_mask].reset_index(drop=True)
+
+    bible_mask = df["domain"] == "bible"
+    mostly_digits_punct_mask = bible_mask & df["target_text"].map(bible_target_is_mostly_digits_punct)
+    counts["dropped_bible_mostly_digits_punct"] = int(mostly_digits_punct_mask.sum())
+    df = df.loc[~mostly_digits_punct_mask].reset_index(drop=True)
+
+    bible_mask = df["domain"] == "bible"
+    target_len = df["target_text"].map(lambda value: len(nfc_strip(value)))
+    lacks_final_punct = df["target_text"].map(bible_target_lacks_final_punctuation)
+    truncation_30_mask = bible_mask & (target_len < 30) & lacks_final_punct
+    bible_rows = int(bible_mask.sum())
+    truncation_threshold = 20 if bible_rows and int(truncation_30_mask.sum()) / bible_rows > 0.03 else 30
+    counts["bible_truncation_threshold_chars"] = truncation_threshold
+    truncated_mask = bible_mask & (target_len < truncation_threshold) & lacks_final_punct
+    counts["dropped_bible_truncated_target"] = int(truncated_mask.sum())
+    df = df.loc[~truncated_mask].reset_index(drop=True)
 
     bible_mask = df["domain"] == "bible"
     short_bible_mask = bible_mask & (df["target_text"].str.len() < 2)
@@ -488,6 +681,16 @@ def build_v3(
     bad_ratio_mask = bible_mask & ((ratio < 0.25) | (ratio > 4.0))
     counts["dropped_bible_length_ratio"] = int(bad_ratio_mask.sum())
     df = df.loc[~bad_ratio_mask].reset_index(drop=True)
+
+    example_expression_mask = df["domain"].isin({"example", "expression"})
+    original_example_expression_targets = df.loc[example_expression_mask, "target_text"].map(nfc_strip)
+    df.loc[example_expression_mask, "target_text"] = df.loc[
+        example_expression_mask, "target_text"
+    ].map(clean_example_expression_target)
+    cleaned_example_expression_targets = df.loc[example_expression_mask, "target_text"].map(nfc_strip)
+    counts["cleaned_example_expression_gloss_suffix"] = int(
+        (original_example_expression_targets != cleaned_example_expression_targets).sum()
+    )
 
     df["source_text"] = df["source_text"].map(nfc_strip)
     df["target_text"] = df["target_text"].map(nfc_strip)
@@ -505,6 +708,7 @@ def build_v3(
 
     df, counts["dropped_exact_dupes"] = _dedupe_prefer_eval(df)
 
+    v34_full_train_mbay_lexicon = pd.DataFrame(columns=df.columns)
     if v31:
         df, holdout_info = reassign_v31_bible_splits(df)
         counts["dropped_v31_lexicon_train_downsample"] = 0
@@ -520,6 +724,13 @@ def build_v3(
             f"{_format_book_counts(holdout_info['test_books'], holdout_info['book_counts'])} "
             f"(rows={holdout_info['test_rows']})"
         )
+        if v34:
+            full_lexicon_mask = (
+                (df["split"] == "train")
+                & (df["domain"] == "lexicon")
+                & (df["source_lang"] == "mbay")
+            )
+            v34_full_train_mbay_lexicon = df.loc[full_lexicon_mask].copy()
         df, counts["dropped_v31_lexicon_train_downsample"] = _downsample_v31_lexicon_train(df, seed=seed)
 
     if v32:
@@ -531,8 +742,31 @@ def build_v3(
         )
         counts.update(v32_counts)
 
+    if v34 and codeswitch_path is not None:
+        codeswitch = _load_extra_train_rows(codeswitch_path, label="codeswitch", required=True)
+        if codeswitch is not None:
+            counts["added_codeswitch"] = len(codeswitch)
+            df = pd.concat([df, codeswitch], ignore_index=True)
+
+    if v34 and replay_path is not None:
+        replay = _load_extra_train_rows(replay_path, label="replay", required=False)
+        if replay is not None:
+            replay_before = len(replay)
+            replay = filter_replay(replay)
+            counts["dropped_replay_filter"] = replay_before - len(replay)
+            counts["added_replay"] = len(replay)
+            df = pd.concat([df, replay], ignore_index=True)
+
     flip_mask = (df["source_lang"] == "mbay") & df["domain"].isin(DICTIONARY_DOMAINS)
-    flipped = df.loc[flip_mask].copy()
+    if v34 and not v34_full_train_mbay_lexicon.empty:
+        current_flip_source = df.loc[
+            flip_mask & ~((df["split"] == "train") & (df["domain"] == "lexicon"))
+        ].copy()
+        flipped_source = pd.concat([current_flip_source, v34_full_train_mbay_lexicon], ignore_index=True)
+        counts["added_v34_full_flipped_train_lexicon"] = len(v34_full_train_mbay_lexicon)
+    else:
+        flipped_source = df.loc[flip_mask].copy()
+    flipped = flipped_source.copy()
     if not flipped.empty:
         flipped[["source_lang", "target_lang"]] = flipped[["target_lang", "source_lang"]]
         flipped[["source_text", "target_text"]] = flipped[["target_text", "source_text"]]
@@ -570,19 +804,32 @@ def main() -> None:
     parser.add_argument("--no-notone-aug", action="store_true", help="Disable tone-stripped train augmentation")
     parser.add_argument("--v31", action="store_true", help="Build corpus v3.1 with book-level bible holdout and tags")
     parser.add_argument("--v32", action="store_true", help="Build corpus v3.2 with restored bible train additions")
+    parser.add_argument("--v34", action="store_true", help="Build corpus v3.4 with restored bible and DDA codeswitch rows")
     parser.add_argument(
         "--restored-bible",
         default="datasets/processed/bible-restored.parquet",
-        help="Restored bible parquet for --v32",
+        help="Restored bible parquet for --v32/--v34",
     )
-    parser.add_argument("--v32-flip-wa", type=float, default=V32_FLIP_WORD_AGREEMENT_MIN)
+    parser.add_argument(
+        "--codeswitch",
+        default=None,
+        help="Codeswitch parquet to append for --v34; rows must be train-only",
+    )
+    parser.add_argument(
+        "--replay",
+        default=None,
+        help="Optional replay parquet to append for --v34; skipped with a warning if absent",
+    )
+    parser.add_argument("--v32-flip-wa", type=float, default=None)
     parser.add_argument("--v32-flip-rt", type=float, default=V32_FLIP_ROUNDTRIP_MIN)
     parser.add_argument("--seed", type=int, default=42, help="Seed for v3.1 deterministic sampling")
     args = parser.parse_args()
 
     input_path = Path(args.input)
     default_output = "datasets/processed/mbay-corpus-v3.parquet"
-    if args.v32:
+    if args.v34:
+        default_output = "datasets/processed/mbay-corpus-v3.4.parquet"
+    elif args.v32:
         default_output = "datasets/processed/mbay-corpus-v3.2.parquet"
     elif args.v31:
         default_output = "datasets/processed/mbay-corpus-v3.1.parquet"
@@ -599,9 +846,12 @@ def main() -> None:
         no_notone_aug=args.no_notone_aug,
         v31=args.v31,
         v32=args.v32,
+        v34=args.v34,
         restored_bible_path=args.restored_bible,
         v32_flip_wa=args.v32_flip_wa,
         v32_flip_rt=args.v32_flip_rt,
+        codeswitch_path=args.codeswitch,
+        replay_path=args.replay,
         seed=args.seed,
     )
 

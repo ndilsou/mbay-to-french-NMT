@@ -4,10 +4,13 @@ import pandas as pd
 import pytest
 
 from mbay_nmt.data_sources.build_v3 import (
+    _load_extra_train_rows,
     apply_v31_source_tags,
     apply_v32_restored_bible,
     build_v3,
     clean_bible_target,
+    clean_example_expression_target,
+    filter_replay,
     reassign_v31_bible_splits,
     strip_combining_marks,
     verify_restored_bible_ready,
@@ -56,6 +59,143 @@ def test_clean_bible_target_removes_integer_runs_adjacent_to_refs():
 def test_clean_bible_target_preserves_non_adjacent_standalone_numbers():
     assert clean_bible_target("10 17 the deceitfulness of riches") == "10 17 the deceitfulness of riches"
     assert clean_bible_target("les 12 apôtres sont venus") == "les 12 apôtres sont venus"
+
+
+def test_build_v3_drops_bible_artifact_rows_after_cleaning(tmp_path):
+    corpus_path = tmp_path / "corpus.parquet"
+    rows = [
+        {
+            "source_lang": "mbay",
+            "target_lang": "eng",
+            "source_text": "source apparatus words here",
+            "target_text": "For ver 47-49, see the note.",
+            "domain": "bible",
+            "provenance": "bible:MlL:GEN.1.1",
+            "split": "train",
+        },
+        {
+            "source_lang": "mbay",
+            "target_lang": "eng",
+            "source_text": "source integer words here",
+            "target_text": "13 15 17 and the words continue.",
+            "domain": "bible",
+            "provenance": "bible:MlL:GEN.1.2",
+            "split": "train",
+        },
+        {
+            "source_lang": "mbay",
+            "target_lang": "eng",
+            "source_text": "source number words here",
+            "target_text": "The list says: 13 15 17 beside him.",
+            "domain": "bible",
+            "provenance": "bible:MlL:GEN.1.3",
+            "split": "train",
+        },
+        {
+            "source_lang": "mbay",
+            "target_lang": "fra",
+            "source_text": "source digits words here",
+            "target_text": "131, 174",
+            "domain": "bible",
+            "provenance": "bible:MlL:GEN.1.4",
+            "split": "train",
+        },
+        {
+            "source_lang": "mbay",
+            "target_lang": "fra",
+            "source_text": "source truncated",
+            "target_text": "Lord forgot them",
+            "domain": "bible",
+            "provenance": "bible:MlL:GEN.1.5",
+            "split": "train",
+        },
+        {
+            "source_lang": "mbay",
+            "target_lang": "eng",
+            "source_text": "source valid number words here",
+            "target_text": "He saw 10 17 men in the city.",
+            "domain": "bible",
+            "provenance": "bible:MlL:GEN.1.6",
+            "split": "train",
+        },
+    ]
+    pd.DataFrame(rows).to_parquet(corpus_path, index=False)
+
+    built, counts = build_v3(corpus_path, no_notone_aug=True)
+
+    assert counts["dropped_bible_apparatus_remnant"] == 1
+    assert counts["dropped_bible_initial_integer_run"] == 2
+    assert counts["dropped_bible_mostly_digits_punct"] == 1
+    assert counts["dropped_bible_truncated_target"] == 1
+    assert counts["bible_truncation_threshold_chars"] == 20
+    assert set(built["provenance"]) == {"bible:MlL:GEN.1.6"}
+
+
+def test_clean_example_expression_target_strips_trailing_gloss_suffixes():
+    assert clean_example_expression_target("Je suis fatigué [Lit: je-suis.fatigué]") == "Je suis fatigué"
+    assert clean_example_expression_target("prendre la route (= aller)") == "prendre la route"
+    assert clean_example_expression_target("gardez [avec mon petit doigt]") == "gardez [avec mon petit doigt]"
+
+
+def test_build_v3_cleans_example_expression_targets_without_dropping_rows(tmp_path):
+    corpus_path = tmp_path / "corpus.parquet"
+    rows = [
+        {
+            "source_lang": "mbay",
+            "target_lang": "fra",
+            "source_text": "m-āw kɨ́ ɗā",
+            "target_text": "Je suis fatigué [Lit: je-suis.fatigué]",
+            "domain": "example",
+            "provenance": "example:1",
+            "split": "train",
+        },
+        {
+            "source_lang": "mbay",
+            "target_lang": "fra",
+            "source_text": "kùlā ɗā",
+            "target_text": "prendre la route (= aller)",
+            "domain": "expression",
+            "provenance": "expression:1",
+            "split": "train",
+        },
+    ]
+    pd.DataFrame(rows).to_parquet(corpus_path, index=False)
+
+    built, counts = build_v3(corpus_path, no_notone_aug=True)
+
+    originals = built[~built["provenance"].str.startswith("flip:")]
+    assert counts["cleaned_example_expression_gloss_suffix"] == 2
+    assert set(originals["target_text"]) == {"Je suis fatigué", "prendre la route"}
+    assert len(originals) == 2
+
+
+def test_filter_replay_drops_document_artifacts_and_weak_pairs():
+    df = pd.DataFrame(
+        [
+            {
+                "source_text": "This sentence has clean source words.",
+                "target_text": "Cette phrase contient des mots propres.",
+            },
+            {"source_text": "Paragraph mark is here ¶ now.", "target_text": "Phrase française assez longue."},
+            {"source_text": "The BAR heading appears here.", "target_text": "Phrase française assez longue."},
+            {"source_text": "Read http://example.com today.", "target_text": "Phrase française assez longue."},
+            {"source_text": "- I am speaking now.", "target_text": "Phrase française assez longue."},
+            {
+                "source_text": "This source sentence is far too long for the target side.",
+                "target_text": "Trop court.",
+            },
+            {"source_text": "Too short.", "target_text": "Phrase française assez longue."},
+        ]
+    )
+
+    filtered = filter_replay(df)
+
+    assert filtered[["source_text", "target_text"]].to_dict("records") == [
+        {
+            "source_text": "This sentence has clean source words.",
+            "target_text": "Cette phrase contient des mots propres.",
+        }
+    ]
 
 
 def test_strip_combining_marks_preserves_mbay_base_letters():
@@ -140,6 +280,15 @@ def test_apply_v32_restored_bible_gates_thresholds_and_prefixes(tmp_path):
             {
                 "source_lang": "mbay",
                 "target_lang": "eng",
+                "source_text": "restored clean source only",
+                "target_text": "dictionary target",
+                "domain": "example",
+                "provenance": "pg:examples:1",
+                "split": "train",
+            },
+            {
+                "source_lang": "mbay",
+                "target_lang": "eng",
                 "source_text": "untoned clean",
                 "target_text": "clean target",
                 "domain": "bible",
@@ -218,6 +367,15 @@ def test_apply_v32_restored_bible_is_train_only(tmp_path):
             {
                 "source_lang": "mbay",
                 "target_lang": "eng",
+                "source_text": "train restored",
+                "target_text": "dictionary target",
+                "domain": "example",
+                "provenance": "pg:examples:1",
+                "split": "train",
+            },
+            {
+                "source_lang": "mbay",
+                "target_lang": "eng",
                 "source_text": "train source",
                 "target_text": "train target",
                 "domain": "bible",
@@ -262,6 +420,146 @@ def test_apply_v32_restored_bible_is_train_only(tmp_path):
     assert len(enriched[enriched["provenance"].str.contains("ROM.1.1", regex=False)]) == 1
 
 
+def test_apply_v32_restored_bible_drops_non_dictionary_glyphs_but_keeps_dictionary_chars(tmp_path):
+    corpus = pd.DataFrame(
+        [
+            {
+                "source_lang": "mbay",
+                "target_lang": "eng",
+                "source_text": "kḭ ȳ dictionary",
+                "target_text": "dictionary target",
+                "domain": "lexicon",
+                "provenance": "pg:entries:1",
+                "split": "train",
+            },
+            {
+                "source_lang": "mbay",
+                "target_lang": "eng",
+                "source_text": "untoned kept",
+                "target_text": "kept target",
+                "domain": "bible",
+                "provenance": "bible:MlL:GEN.1.1",
+                "split": "train",
+            },
+            {
+                "source_lang": "mbay",
+                "target_lang": "eng",
+                "source_text": "untoned dropped",
+                "target_text": "dropped target",
+                "domain": "bible",
+                "provenance": "bible:MlL:GEN.1.2",
+                "split": "train",
+            },
+        ]
+    )
+    restored_path = tmp_path / "bible-restored.parquet"
+    _restored_rows(
+        [
+            {
+                "provenance": "bible:MlL:GEN.1.1",
+                "restored_text": "kḭ ȳ",
+                "roundtrip_sim": 1.0,
+                "word_agreement": 1.0,
+            },
+            {
+                "provenance": "bible:MlL:GEN.1.2",
+                "restored_text": "Ɂér bad",
+                "roundtrip_sim": 1.0,
+                "word_agreement": 1.0,
+            },
+        ]
+    ).to_parquet(restored_path, index=False)
+
+    enriched, counts = apply_v32_restored_bible(corpus, restored_path)
+
+    assert counts["dropped_v32_restored_source_non_whitelist"] == 1
+    assert counts["dropped_v32_restored_flip_non_whitelist"] == 1
+    assert counts["added_v32_restored_source"] == 1
+    assert counts["added_v32_restored_flip"] == 1
+    assert "kḭ ȳ" in set(enriched["source_text"])
+    assert "kḭ ȳ" in set(enriched["target_text"])
+    assert "Ɂér bad" not in set(enriched["source_text"])
+    assert "Ɂér bad" not in set(enriched["target_text"])
+
+
+def test_apply_v32_restored_bible_drops_repeated_restored_candidates(tmp_path):
+    corpus = pd.DataFrame(
+        [
+            {
+                "source_lang": "mbay",
+                "target_lang": "eng",
+                "source_text": "alpha beta gamma delta epsilon zeta eta theta dictionary",
+                "target_text": "dictionary target",
+                "domain": "example",
+                "provenance": "pg:examples:1",
+                "split": "train",
+            },
+            {
+                "source_lang": "mbay",
+                "target_lang": "eng",
+                "source_text": "untoned repeated gram",
+                "target_text": "repeated gram target",
+                "domain": "bible",
+                "provenance": "bible:MlL:GEN.1.1",
+                "split": "train",
+            },
+            {
+                "source_lang": "mbay",
+                "target_lang": "eng",
+                "source_text": "untoned repeated token",
+                "target_text": "repeated token target",
+                "domain": "bible",
+                "provenance": "bible:MlL:GEN.1.2",
+                "split": "train",
+            },
+            {
+                "source_lang": "mbay",
+                "target_lang": "eng",
+                "source_text": "untoned clean restored",
+                "target_text": "clean restored target",
+                "domain": "bible",
+                "provenance": "bible:MlL:GEN.1.3",
+                "split": "train",
+            },
+        ]
+    )
+    restored_path = tmp_path / "bible-restored.parquet"
+    _restored_rows(
+        [
+            {
+                "provenance": "bible:MlL:GEN.1.1",
+                "restored_text": "alpha beta gamma delta alpha beta gamma delta alpha beta gamma delta",
+                "roundtrip_sim": 1.0,
+                "word_agreement": 1.0,
+            },
+            {
+                "provenance": "bible:MlL:GEN.1.2",
+                "restored_text": "alpha alpha alpha alpha beta gamma delta",
+                "roundtrip_sim": 1.0,
+                "word_agreement": 1.0,
+            },
+            {
+                "provenance": "bible:MlL:GEN.1.3",
+                "restored_text": "alpha beta gamma delta epsilon zeta eta",
+                "roundtrip_sim": 1.0,
+                "word_agreement": 1.0,
+            },
+        ]
+    ).to_parquet(restored_path, index=False)
+
+    enriched, counts = apply_v32_restored_bible(corpus, restored_path)
+
+    assert counts["dropped_v32_restored_source_repetition"] == 2
+    assert counts["dropped_v32_restored_flip_repetition"] == 2
+    assert counts["added_v32_restored_source"] == 1
+    assert counts["added_v32_restored_flip"] == 1
+    assert "alpha beta gamma delta epsilon zeta eta" in set(enriched["source_text"])
+    assert "alpha beta gamma delta alpha beta gamma delta alpha beta gamma delta" not in set(
+        enriched["source_text"]
+    )
+    assert "alpha alpha alpha alpha beta gamma delta" not in set(enriched["source_text"])
+
+
 def test_build_v32_restored_rows_keep_v31_bible_source_tag(tmp_path):
     corpus_path = tmp_path / "corpus.parquet"
     books = ["GEN", "ROM", "EXO", "GAL", "JOS"]
@@ -270,14 +568,25 @@ def test_build_v32_restored_rows_keep_v31_bible_source_tag(tmp_path):
             {
                 "source_lang": "mbay",
                 "target_lang": "eng",
+                "source_text": "restored source GEN ROM EXO GAL JOS",
+                "target_text": "dictionary target",
+                "domain": "example",
+                "provenance": "pg:examples:1",
+                "split": "train",
+            },
+        ]
+        + [
+            {
+                "source_lang": "mbay",
+                "target_lang": "eng",
                 "source_text": f"mbay source {book}",
-                "target_text": f"english target {book}",
+                "target_text": f"english target {book}.",
                 "domain": "bible",
                 "provenance": f"bible:MlL:{book}.1.1",
                 "split": "train",
             }
             for book in books
-        ]
+        ],
     ).to_parquet(corpus_path, index=False)
     restored_path = tmp_path / "bible-restored.parquet"
     _restored_rows(
@@ -324,3 +633,86 @@ def test_nfc_strip_folds_typographic_punctuation_to_tokenizer_safe_ascii():
     from mbay_nmt.data_sources.build_v3 import nfc_strip
 
     assert nfc_strip("l’Éternel dit: “va” – « attends »…") == "l'Éternel dit: \"va\" - \" attends \"…"
+
+
+def test_load_extra_train_rows_rejects_non_train_split(tmp_path):
+    extra_path = tmp_path / "codeswitch.parquet"
+    pd.DataFrame(
+        [
+            {
+                "source_lang": "eng",
+                "target_lang": "mbay",
+                "source_text": "fish",
+                "target_text": "kó̰",
+                "domain": "codeswitch",
+                "provenance": "dda:ex:1",
+                "split": "val",
+            }
+        ]
+    ).to_parquet(extra_path, index=False)
+
+    with pytest.raises(AssertionError, match="train-only"):
+        _load_extra_train_rows(extra_path, label="codeswitch")
+
+
+def test_build_v34_flips_full_train_lexicon_after_downsampling(tmp_path):
+    corpus_path = tmp_path / "corpus.parquet"
+    restored_path = tmp_path / "bible-restored.parquet"
+    books = ["GEN", "ROM", "EXO", "GAL", "JOS"]
+    lexicon_rows = [
+        {
+            "source_lang": "mbay",
+            "target_lang": "eng",
+            "source_text": f"mbay{i}",
+            "target_text": f"word{i}",
+            "domain": "lexicon",
+            "provenance": f"lex:{i}",
+            "split": "train",
+        }
+        for i in range(20)
+    ]
+    bible_rows = [
+        {
+            "source_lang": "mbay",
+            "target_lang": "eng",
+            "source_text": f"bible source {book}",
+            "target_text": f"bible target {book}.",
+            "domain": "bible",
+            "provenance": f"bible:MlL:{book}.1.1",
+            "split": "train",
+        }
+        for book in books
+    ]
+    pd.DataFrame(lexicon_rows + bible_rows).to_parquet(corpus_path, index=False)
+    _restored_rows(
+        [
+            {
+                "provenance": "bible:MlL:UNMATCHED.1.1",
+                "restored_text": "unused",
+                "roundtrip_sim": 0.0,
+                "word_agreement": 0.0,
+            }
+        ]
+    ).to_parquet(restored_path, index=False)
+
+    built, counts = build_v3(corpus_path, v34=True, restored_bible_path=restored_path, no_notone_aug=True, seed=7)
+
+    train_mbay_to_eng_lexicon = built[
+        (built["source_lang"] == "mbay")
+        & (built["target_lang"] == "eng")
+        & (built["domain"] == "lexicon")
+        & (built["split"] == "train")
+        & ~built["provenance"].str.startswith("flip:")
+    ]
+    train_eng_to_mbay_lexicon = built[
+        (built["source_lang"] == "eng")
+        & (built["target_lang"] == "mbay")
+        & (built["domain"] == "lexicon")
+        & (built["split"] == "train")
+        & built["provenance"].str.startswith("flip:")
+    ]
+
+    assert counts["dropped_v31_lexicon_train_downsample"] == 10
+    assert counts["added_v34_full_flipped_train_lexicon"] == 20
+    assert len(train_mbay_to_eng_lexicon) == 10
+    assert len(train_eng_to_mbay_lexicon) == 20
