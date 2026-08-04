@@ -46,6 +46,14 @@ V32_FLIP_WORD_AGREEMENT_MIN = 0.90
 V32_FLIP_ROUNDTRIP_MIN = 0.95
 V32_BASIC_ALLOWED_CHARS = set(string.digits + string.punctuation + string.whitespace)
 V34_FLIP_WORD_AGREEMENT_MIN = 0.75
+V35_LEX_TAG = "<lex> "
+V35_BT_TAG = "<bt> "
+V35_COPY_TAG = "<copy> "
+V35_HINT_MARKER = " <hint> "
+V35_HINT_PROB_NUM = 128  # out of 256: p=0.5 on first digest byte
+V35_HINT_MAX = 2
+V35_BT_MIN_SOURCE_WORDS = 3
+V35_BT_MIN_UNIQUE_SOURCE_WORDS = 3
 V31_OT_NARRATIVE_BOOKS = {
     "GEN",
     "EXO",
@@ -377,6 +385,131 @@ def _load_extra_train_rows(extra_path: str | Path, *, label: str, required: bool
     return extra.reset_index(drop=True)
 
 
+def apply_v35_lexicon_flip_tags(df: pd.DataFrame) -> tuple[pd.DataFrame, int]:
+    """Tag flipped-lexicon sources so the headword register is opt-in at inference."""
+    out = df.copy()
+    mask = (
+        (out["domain"] == "lexicon")
+        & (out["target_lang"] == "mbay")
+        & out["provenance"].astype(str).str.startswith("flip:")
+        & ~out["source_text"].str.startswith(V35_LEX_TAG, na=False)
+    )
+    out.loc[mask, "source_text"] = V35_LEX_TAG + out.loc[mask, "source_text"]
+    return out, int(mask.sum())
+
+
+_V35_WORD_RE = re.compile(r"[^\W\d_]+(?:['\-][^\W\d_]+)*", re.UNICODE)
+
+
+def load_v35_bt_rows(bt_path: str | Path) -> tuple[pd.DataFrame, dict[str, int]]:
+    """Tagged back-translation + copied-monolingual rows from a bt-generated parquet.
+
+    Targets are real Keegan Mbay text; only sources are model-generated, so gates
+    apply to the source side (the silver-text gates guard model-generated targets).
+    """
+    bt = pd.read_parquet(bt_path)
+    missing = {"mbay", "fra", "eng"} - set(bt.columns)
+    if missing:
+        raise ValueError(f"bt parquet is missing columns: {sorted(missing)}")
+
+    counts = {
+        "added_bt_fra": 0,
+        "added_bt_eng": 0,
+        "added_bt_copy": 0,
+        "dropped_bt_source_short": 0,
+        "dropped_bt_source_degenerate": 0,
+        "dropped_bt_source_dupe": 0,
+    }
+    mbay_texts = [nfc_strip(t) for t in bt["mbay"]]
+    rows: list[tuple[str, ...]] = []
+    seen_sources: set[tuple[str, str]] = set()
+    for lang in ("fra", "eng"):
+        for mb, raw_source in zip(mbay_texts, bt[lang]):
+            source = nfc_strip(raw_source)
+            words = source.split()
+            if len(words) < V35_BT_MIN_SOURCE_WORDS:
+                counts["dropped_bt_source_short"] += 1
+                continue
+            if len({w.lower() for w in words}) < V35_BT_MIN_UNIQUE_SOURCE_WORDS:
+                counts["dropped_bt_source_degenerate"] += 1
+                continue
+            key = (lang, source.lower())
+            if key in seen_sources:
+                counts["dropped_bt_source_dupe"] += 1
+                continue
+            seen_sources.add(key)
+            rows.append((lang, "mbay", V35_BT_TAG + source, mb, "bt", "bt:asr-keegan", "train"))
+            counts[f"added_bt_{lang}"] += 1
+    for mb in dict.fromkeys(mbay_texts):
+        rows.append(("mbay", "mbay", V35_COPY_TAG + mb, mb, "copy", "copy:asr-keegan", "train"))
+        counts["added_bt_copy"] += 1
+    return pd.DataFrame(rows, columns=CORPUS_COLUMNS), counts
+
+
+def _v35_hint_lookup(df: pd.DataFrame) -> dict[tuple[str, str], list[str]]:
+    lex_flips = df.loc[
+        (df["domain"] == "lexicon")
+        & (df["target_lang"] == "mbay")
+        & df["provenance"].astype(str).str.startswith("flip:")
+    ]
+    lookup: dict[tuple[str, str], list[str]] = {}
+    for source_lang, gloss, headword in zip(
+        lex_flips["source_lang"], lex_flips["source_text"], lex_flips["target_text"]
+    ):
+        gloss = gloss.removeprefix(V35_LEX_TAG)
+        words = _V35_WORD_RE.findall(gloss.lower())
+        if len(words) > 3:
+            continue
+        for word in words:
+            if len(word) > 3:
+                lookup.setdefault((source_lang, word), []).append(headword)
+    return lookup
+
+
+def apply_v35_hints(df: pd.DataFrame, *, seed: int) -> tuple[pd.DataFrame, int]:
+    """Append verified dictionary hints to sentence-register X->mbay train sources.
+
+    A hint is only attached when the headword actually occurs in the target, so
+    the model learns hints are trustworthy; p=0.5 dropout keeps the unhinted
+    path trained for inputs where inference-time lookup finds nothing.
+    """
+    lookup = _v35_hint_lookup(df)
+    out = df.copy()
+    mask = (
+        (out["split"] == "train")
+        & (out["target_lang"] == "mbay")
+        & out["domain"].isin({"example", "expression"})
+        & out["provenance"].astype(str).str.startswith("flip:")
+    )
+    hinted = 0
+    for idx in out.index[mask]:
+        source = out.at[idx, "source_text"]
+        target = out.at[idx, "target_text"]
+        digest = hashlib.sha256(f"{seed}:{source}:{target}".encode()).digest()
+        if digest[0] >= V35_HINT_PROB_NUM:
+            continue
+        source_lang = out.at[idx, "source_lang"]
+        hints: list[tuple[str, str]] = []
+        used_headwords: set[str] = set()
+        for word in _V35_WORD_RE.findall(source.lower()):
+            if len(word) <= 3:
+                continue
+            for headword in lookup.get((source_lang, word), []):
+                if headword in used_headwords or headword not in target or headword == target:
+                    continue
+                hints.append((word, headword))
+                used_headwords.add(headword)
+                break
+            if len(hints) >= V35_HINT_MAX:
+                break
+        if hints:
+            out.at[idx, "source_text"] = (
+                source + V35_HINT_MARKER + " ; ".join(f"{w} = {hw}" for w, hw in hints)
+            )
+            hinted += 1
+    return out, hinted
+
+
 def _format_book_counts(books: tuple[str, str], book_counts: dict[str, int]) -> str:
     return ", ".join(f"{book}={book_counts.get(book, 0)}" for book in books)
 
@@ -595,17 +728,21 @@ def build_v3(
     v31: bool = False,
     v32: bool = False,
     v34: bool = False,
+    v35: bool = False,
     restored_bible_path: str | Path = "datasets/processed/bible-restored.parquet",
     v32_flip_wa: float | None = None,
     v32_flip_rt: float = V32_FLIP_ROUNDTRIP_MIN,
     codeswitch_path: str | Path | None = None,
     replay_path: str | Path | None = None,
+    bt_path: str | Path | None = None,
     seed: int = 42,
 ) -> tuple[pd.DataFrame, dict[str, int]]:
-    v32 = v32 or v34
+    # v3.5 keeps the v3.4 recipe but reverts the full-lexicon flip upweight
+    # (register-bleed finding), so it deliberately does NOT set v34.
+    v32 = v32 or v34 or v35
     v31 = v31 or v32
     if v32_flip_wa is None:
-        v32_flip_wa = V34_FLIP_WORD_AGREEMENT_MIN if v34 else V32_FLIP_WORD_AGREEMENT_MIN
+        v32_flip_wa = V34_FLIP_WORD_AGREEMENT_MIN if (v34 or v35) else V32_FLIP_WORD_AGREEMENT_MIN
     if v32:
         verify_restored_bible_ready(restored_bible_path)
 
@@ -748,7 +885,7 @@ def build_v3(
             counts["added_codeswitch"] = len(codeswitch)
             df = pd.concat([df, codeswitch], ignore_index=True)
 
-    if v34 and replay_path is not None:
+    if (v34 or v35) and replay_path is not None:
         replay = _load_extra_train_rows(replay_path, label="replay", required=False)
         if replay is not None:
             replay_before = len(replay)
@@ -789,8 +926,18 @@ def build_v3(
                 counts["added_notone_train"] = len(notone)
                 df = pd.concat([df, notone], ignore_index=True)
 
+    if v35:
+        df, counts["tagged_v35_lexicon_flips"] = apply_v35_lexicon_flip_tags(df)
+        if bt_path is not None:
+            bt_rows, bt_counts = load_v35_bt_rows(bt_path)
+            counts.update(bt_counts)
+            df = pd.concat([df, bt_rows], ignore_index=True)
+
     if v31:
         df = apply_v31_source_tags(df)
+
+    if v35:
+        df, counts["hinted_v35_example_rows"] = apply_v35_hints(df, seed=seed)
 
     df, counts["dropped_train_eval_pair_leakage"] = _drop_train_eval_pair_leakage(df)
     _assert_no_train_eval_leakage(df)
@@ -805,6 +952,16 @@ def main() -> None:
     parser.add_argument("--v31", action="store_true", help="Build corpus v3.1 with book-level bible holdout and tags")
     parser.add_argument("--v32", action="store_true", help="Build corpus v3.2 with restored bible train additions")
     parser.add_argument("--v34", action="store_true", help="Build corpus v3.4 with restored bible and DDA codeswitch rows")
+    parser.add_argument(
+        "--v35",
+        action="store_true",
+        help="Build corpus v3.5: v3.4 hygiene + <lex>-tagged 1x lexicon flips + tagged BT/copy rows + dictionary hints",
+    )
+    parser.add_argument(
+        "--bt",
+        default=None,
+        help="bt-generated parquet (columns mbay/fra/eng) for --v35 tagged back-translation rows",
+    )
     parser.add_argument(
         "--restored-bible",
         default="datasets/processed/bible-restored.parquet",
@@ -827,7 +984,9 @@ def main() -> None:
 
     input_path = Path(args.input)
     default_output = "datasets/processed/mbay-corpus-v3.parquet"
-    if args.v34:
+    if args.v35:
+        default_output = "datasets/processed/mbay-corpus-v3.5.parquet"
+    elif args.v34:
         default_output = "datasets/processed/mbay-corpus-v3.4.parquet"
     elif args.v32:
         default_output = "datasets/processed/mbay-corpus-v3.2.parquet"
@@ -847,11 +1006,13 @@ def main() -> None:
         v31=args.v31,
         v32=args.v32,
         v34=args.v34,
+        v35=args.v35,
         restored_bible_path=args.restored_bible,
         v32_flip_wa=args.v32_flip_wa,
         v32_flip_rt=args.v32_flip_rt,
         codeswitch_path=args.codeswitch,
         replay_path=args.replay,
+        bt_path=args.bt,
         seed=args.seed,
     )
 
