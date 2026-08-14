@@ -1,0 +1,12 @@
+[Unit]
+Description=Mbay translator demo (FastAPI + CT2 int8)
+After=network.target
+
+[Service]
+WorkingDirectory=%h/mbay
+ExecStart=/usr/local/bin/uv run %h/mbay/mbay_app.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
