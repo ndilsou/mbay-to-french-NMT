@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["ctranslate2>=4.0", "transformers>=4.40", "sentencepiece", "fastapi", "uvicorn"]
+# dependencies = ["ctranslate2>=4.0", "transformers>=4.40", "sentencepiece", "fastapi", "uvicorn", "certifi>=2026.10.19"]
 # ///
 """Mbay translator demo — run G (CT2 int8) with dictionary hints behind a tiny FastAPI UI.
 
@@ -8,6 +8,7 @@ Run G (v3.5: register tags + tagged BT + dict hints) beats E/F in every directio
 X->mbay inputs get unambiguous-lexicon hints appended, mirroring training format.
 """
 import json
+import os
 import re
 import unicodedata
 from pathlib import Path
@@ -15,7 +16,7 @@ from pathlib import Path
 import ctranslate2
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from transformers import AutoTokenizer
 
 BASE = Path.home() / "mbay/models"
@@ -31,7 +32,7 @@ app = FastAPI(title="Mbay Translator")
 
 
 class Req(BaseModel):
-    text: str
+    text: str = Field(min_length=1, max_length=4000)
     src: str
     tgt: str
 
@@ -124,4 +125,4 @@ def index():
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=8384)
+    uvicorn.run(app, host=os.environ.get("MBAY_HOST", "127.0.0.1"), port=8384, limit_concurrency=8)

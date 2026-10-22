@@ -3,6 +3,8 @@ Description=Mbay translator demo (FastAPI + CT2 int8)
 After=network.target
 
 [Service]
+Environment=MBAY_HOST=100.69.117.82
+Environment=UV_SYSTEM_CERTS=true
 WorkingDirectory=%h/mbay
 ExecStart=/usr/local/bin/uv run %h/mbay/mbay_app.py
 Restart=on-failure
